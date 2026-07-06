@@ -25,7 +25,20 @@ package exercises
 // Forbidden: time.Sleep, buffering sized to "fit everything" so you can
 // send without a goroutine (that dodges requirement 1's lesson).
 
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func Generate(nums ...int) <-chan int {
+//		panic("implement me")
+//	}
+
 // Generate returns a channel that yields each of nums in order, then closes.
 func Generate(nums ...int) <-chan int {
-	panic("implement me")
+	ch := make(chan int)
+	go func() {
+		for _, num := range nums {
+			ch <- num
+		}
+		close(ch)
+	}()
+	return ch
 }

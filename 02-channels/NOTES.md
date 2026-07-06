@@ -157,6 +157,37 @@ for v := range ch {   // receive until the channel is CLOSED and drained
 // loop exits here only because someone closed ch
 ```
 
+**What this is actually shorthand for** — and this is the detail that
+matters, not just syntax sugar:
+
+```go
+for {
+    v, ok := <-ch   // the comma-ok form
+    if !ok {
+        break        // channel is closed AND drained — stop looping
+    }
+    fmt.Println(v)
+}
+```
+
+`range` isn't just "call `<-ch` repeatedly" — it's "call `<-ch` repeatedly,
+**and automatically check `ok` every time, stopping the moment `ok` is
+`false`."** That automatic stopping check is the entire reason `range`
+exists for channels, not merely a shorter way to write a loop.
+
+**Why plain repeated `<-ch`, with no `ok` check, is actually dangerous:**
+remember from the axioms table — once a channel is closed and drained,
+`<-ch` never blocks again; it just hands back the zero value, instantly,
+forever. A loop written as `for { v := <-ch; ... }`, with no `ok` check, has
+no way to notice the channel closed. It would spin forever, "receiving"
+endless zero values, never stopping. `range`'s built-in `ok` check is
+precisely the difference between "receive some values" and "receive until
+told there are no more." (`demo/03-close-range/main.go` shows both styles
+side by side on purpose: scene 1 uses `range` and stops silently; scene 2
+manually receives with an explicit `ok` check specifically so it can *print*
+`ok` at each step and show you the drain-then-`false` transition, which
+`range` would otherwise hide by just quietly ending the loop right there.)
+
 **The trap you will absolutely hit** (it's exercise 2): `range ch` exits
 *only* on close. If the producer forgets to close, `range` waits forever —
 your program hangs with no error message. Symptom from the outside:
@@ -207,6 +238,58 @@ channel *deliberately* useful.
 
 ▶ **Run:** `go run ./02-channels/demo/03-close-range` — close semantics,
 buffer draining, comma-ok, and a recovered send-on-closed panic, all live.
+
+### The generator/producer pattern: send in a goroutine, return the channel
+
+This is **the** standard shape for any function that hands back a channel —
+you'll write it constantly from here on, and it's the foundation every
+pipeline in Module 4 is built from (it's also, almost verbatim, the
+`Generate`/`Squares` example from Rob Pike's original "Go Concurrency
+Patterns" talk — this isn't a one-off exercise trick, it's THE idiom):
+
+```go
+func Generate(nums ...int) <-chan int {
+    ch := make(chan int)
+    go func() {
+        for _, n := range nums {
+            ch <- n
+        }
+        close(ch)
+    }()
+    return ch   // returns immediately — does not wait for the goroutine above
+}
+```
+
+**Why the send has to be inside a goroutine here, specifically:** the
+function's whole contract is "return a channel the caller will receive
+from." But the caller can't receive from a channel it doesn't have yet — it
+only gets `ch` once `Generate` reaches `return ch`. And an unbuffered send
+blocks until a receiver exists. So if `Generate` tried to send **before**
+returning, that send would block waiting for a receiver — but the only
+possible receiver (the caller) can't exist yet, because `Generate` hasn't
+returned. Two things each waiting on the other to move first: the same
+deadlock shape as trying `ch <- v` then `<-ch` in a single goroutine with no
+concurrency at all. The goroutine breaks the cycle: it lets "send the
+values" and "return the channel" become two independently-scheduled tasks
+instead of one blocked sequence, so `return ch` fires immediately while the
+sending continues in the background, waiting patiently for whoever
+eventually ranges over the channel.
+
+**Does the goroutine's body definitely start running only *after*
+`return ch`?** No — and this is worth being precise about. `go func(){...}()`
+is guaranteed to return control to the next line (`return ch`) *without
+blocking* — starting a goroutine never waits for it to actually begin
+executing. But whether the new goroutine's code has *already started
+running* by the time `return ch` executes is not guaranteed either way; on a
+multi-core machine the runtime may schedule it onto another thread and start
+running it in genuine parallel, possibly reaching `ch <- n` before or after
+`return ch` completes — Go makes no promise about the order between them.
+**This is harmless, and it's precisely why an unbuffered channel is the
+right tool here:** if the goroutine's send reaches the channel first, it
+simply **blocks**, patiently waiting for a receiver — it doesn't error, and
+it doesn't need `return ch` to have "already happened" in some strict sense.
+The channel's own blocking behavior is the synchronization; you never need
+to reason about which line technically ran first.
 
 ## 5. Channel direction in signatures
 
@@ -279,10 +362,86 @@ case <-time.After(2 * time.Second):
 }
 ```
 
-`time.After(d)` returns a channel that delivers one value after `d`. So this
-reads: "whichever happens first — a result, or the clock — wins." (In
-long-lived loops prefer `time.NewTimer` and stop it; pre-1.23 `time.After`
-held memory until firing. For one-shot calls like the exercises, `time.After`
+**First, what `time.After` actually gives you.** `timeoutCh := time.After(2 *
+time.Second)` returns a **channel** immediately — no blocking, no waiting.
+That channel starts out empty. Behind the scenes Go starts an internal
+timer, and **after exactly that duration elapses, it sends exactly one value
+into the channel** (the current time, though you almost never care what the
+value actually is). Think of it as a stopwatch-shaped channel that will ding
+once, in 2 seconds, no matter what — until then, receiving from it just
+blocks like any empty channel.
+
+**Now the whole idiom.** `select` is watching two channels at once, same
+rule as always: it blocks until *whichever is ready first* delivers, then
+runs that case.
+
+- `resultCh` — some other goroutine is doing real work (a network call, a
+  slow query) and will eventually send the actual answer into it.
+- `time.After(2 * time.Second)` — a channel that delivers exactly once, in
+  2 seconds, guaranteed.
+
+You're racing them. **Whichever delivers first wins** — that's the entire
+idiom in one sentence. Real work finishes fast → `resultCh` wins, return the
+real result. 2 seconds pass with nothing → the timer wins instead, give up
+and return an error.
+
+A full worked example, with a timeline:
+
+```go
+func slowCall() string {
+    time.Sleep(5 * time.Second) // pretend this is a slow network call
+    return "the real answer"
+}
+
+func main() {
+    resultCh := make(chan string, 1)
+    go func() {
+        resultCh <- slowCall()
+    }()
+
+    select {
+    case result := <-resultCh:
+        fmt.Println("got:", result)
+    case <-time.After(2 * time.Second):
+        fmt.Println("gave up waiting")
+    }
+}
+```
+
+```
+t=0s   main starts a goroutine to run slowCall()
+t=0s   main enters select — now racing two channels
+t=0s   time.After's internal timer starts counting down from 2s
+t=2s   time.After's channel delivers → select's SECOND case is ready first
+       → prints "gave up waiting", select returns
+t=5s   slowCall() finally finishes, tries `resultCh <- ...`
+       → but nobody's listening anymore (select already moved on)
+```
+
+Notice `resultCh` is deliberately **buffered** (`make(chan string, 1)`) —
+this is the exact leak issue from Module 1's `ex4`, wearing a channel
+costume. At `t=5s`, the slow goroutine still tries to send its late answer.
+If `resultCh` were unbuffered, that send would **block forever** — nobody
+will ever receive from it again, since `select` already picked the timeout
+branch and moved on. The buffer of size 1 gives that late send somewhere to
+land instantly, so the goroutine finishes and exits cleanly instead of
+leaking. This is precisely what `ex3_first.go` (`FirstResponse`) is asking
+you to get right — "the same one idea" as `ex4`, just with a clock added.
+
+**Where you'll actually reach for this:** anywhere you're waiting on
+something that might never come back, and refuse to wait forever — calling
+an external service ("respond in 3s or I fail the request"), waiting on a
+goroutine that might be stuck, or a test that shouldn't hang the whole suite
+(exactly what `collectWithTimeout` does in your own `ex1_generate_test.go`:
+race the real channel against `time.After` so a hang fails with a clear
+message instead of freezing your terminal). One-sentence mental model:
+**`select` + `time.After` turns "wait for this" into "wait for this, but not
+longer than X" — by racing the real channel against a clock that's also just
+a channel.**
+
+(In long-lived loops prefer `time.NewTimer` and stop it explicitly;
+pre-Go-1.23 `time.After` held its timer's memory until firing even if you
+stopped needing it. For one-shot calls like the exercises above, `time.After`
 is fine and idiomatic.)
 
 - **The nil-channel trick:** remember from the axioms that operations on a

@@ -21,9 +21,10 @@ frozen terminal. Still, pass `-timeout 30s` to `go test` while iterating.
 | `ex3_first.go` | **Implement** `FirstResponse`: fastest replica wins, with a timeout — and WITHOUT leaking the losers (Module 1 ex4's lesson, now with `select`). |
 | `ex4_merge.go` | **Implement** `Merge` (fan-in): combine N input channels into one output, closed exactly when all inputs are done. Needs the multi-sender close pattern. |
 | `ex5_closepanic.go` | **Fix the bug**: `StreamAll` panics. Read the panic message, find which close rule is being violated, restructure so exactly one goroutine closes. |
+| `ex6_fibonacci.go` | **Implement** `Fibonacci`: same producer pattern as ex1, different shape — each value depends on the previous two, so "one goroutine per value" isn't just wrong, it's structurally impossible. Do this one if ex1 felt shaky. |
 
-Suggested order: ex1 → ex2 → ex5 → ex3 → ex4 (roughly increasing
-coordination complexity).
+Suggested order: ex1 → ex6 → ex2 → ex5 → ex3 → ex4 (roughly increasing
+coordination complexity; ex6 is a drop-in rep right after ex1).
 
 Also do `../DRILLS.md` — predict each snippet's behavior on paper BEFORE
 running anything. Prediction is the skill interviews actually test.

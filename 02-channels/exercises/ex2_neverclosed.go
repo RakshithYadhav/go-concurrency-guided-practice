@@ -28,7 +28,7 @@ func CollectSquares(nums []int) []int {
 			squares <- n * n
 		}
 	}()
-
+	close(squares)
 	var results []int
 	for sq := range squares {
 		results = append(results, sq)
