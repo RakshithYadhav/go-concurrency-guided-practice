@@ -29,15 +29,12 @@ func ProcessAll(jobs []string, process func(job string) string) []string {
 	results := make([]string, len(jobs))
 
 	var wg sync.WaitGroup
-	var idx int
-	var job string
+	
 	for i, j := range jobs {
-		idx = i
-		job = j
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[idx] = process(job)
+			results[i] = process(j)
 		}()
 	}
 	wg.Wait()

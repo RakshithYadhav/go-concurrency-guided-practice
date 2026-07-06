@@ -274,19 +274,66 @@ it's in every codebase written before 2025 and in every interview.
 
 ## 5. Closures and the loop-variable story
 
-### What a closure captures
+### What is a closure?
+
+Forget goroutines and loops for a second — a closure is a language feature on
+its own.
+
+A **closure** is a function that **"remembers" variables from the place it
+was created**, even after that surrounding code has already finished running.
 
 ```go
-count := 0
-increment := func() { count++ }  // closure: captures the VARIABLE count
-increment()
-increment()
-fmt.Println(count) // 2
+func makeCounter() func() int {
+    count := 0                 // a variable, local to makeCounter
+
+    return func() int {        // this inner function is the closure
+        count++                // it reaches OUT and touches count
+        return count
+    }
+}
+
+c := makeCounter()
+fmt.Println(c())  // 1
+fmt.Println(c())  // 2
+fmt.Println(c())  // 3
 ```
 
-The closure doesn't get a copy of `count` — it holds a reference to *the
-variable itself*. When a closure runs in a goroutine, that means two
-goroutines can be looking at the same variable. Keep that loaded in your head.
+Think about what's strange here: `makeCounter()` already returned before you
+ever called `c()`. Normally, once a function returns, its local variables are
+gone — cleaned up, done. But `count` isn't gone. The inner function kept a
+**live connection** to it. Every time you call `c()`, it's touching the
+*same* `count`, not a fresh copy. That live connection is the closure.
+
+**Analogy:** imagine `count` is a whiteboard in a room. `makeCounter` writes
+`0` on it, then hands you a marker with a string tied to that specific
+whiteboard (`c`, the returned function). The room may look "closed" from the
+outside once `makeCounter` returns, but the marker still has a private tether
+back to that whiteboard. Every time you use the marker, you're editing that
+same whiteboard — not a new one, and not a snapshot of what it said earlier.
+
+### The one rule that matters
+
+> **A closure captures the variable itself, not the value it held at that
+> moment.**
+
+That means: if the captured variable changes later, the closure sees the
+*new* value — not whatever it was when the closure was created.
+
+```go
+i := 42
+f := func() { fmt.Println(i) }  // f captures the variable i, not the value 42
+
+i = 99
+f()                              // prints 99, NOT 42
+```
+
+`f` didn't take a snapshot of `42`. It holds a reference to the actual
+variable `i`. By the time you call `f()`, `i` has become `99`, so that's what
+it sees. When a closure runs *inside a goroutine*, this matters even more:
+the goroutine runs **later** (Section 3), so whatever it captured may have
+already changed by the time it actually executes. Two goroutines closing over
+the *same* variable is two goroutines looking at one whiteboard — exactly the
+shared-mutable-state setup that leads to data races (Section 6).
 
 ### The famous gotcha (pre-Go 1.22)
 
