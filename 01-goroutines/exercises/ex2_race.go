@@ -20,6 +20,26 @@ import (
 	"sync"
 )
 
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func WordFrequency(docs []string) map[string]int {
+//		freq := make(map[string]int)
+//
+//		var wg sync.WaitGroup
+//		for _, doc := range docs {
+//			wg.Add(1)
+//			go func() {
+//				defer wg.Done()
+//				for _, word := range strings.Fields(doc) {
+//					freq[word]++
+//				}
+//			}()
+//		}
+//		wg.Wait()
+//
+//		return freq
+//	}
+
 // WordFrequency returns how many times each word appears across all docs.
 // BUG: multiple goroutines mutate `freq` with no synchronization.
 func WordFrequency(docs []string) map[string]int {
@@ -27,9 +47,7 @@ func WordFrequency(docs []string) map[string]int {
 	frequencies := make([]map[string]int, len(docs))
 	var wg sync.WaitGroup
 	for i, doc := range docs {
-
 		wg.Add(1)
-
 		frequency := make(map[string]int)
 		go func() {
 			defer wg.Done()

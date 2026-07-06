@@ -381,6 +381,52 @@ So why still learn it?
    share any of those between goroutines and you're in race territory. Which
    is exactly section 6.
 
+### The trap that survives 1.22: copying the loop variable out
+
+Here's the version of this bug that Go 1.22 does **not** fix, and it's easy
+to write by accident:
+
+```go
+var idx int
+var job string
+for i, j := range jobs {
+    idx = i          // reassigning ONE outer variable, not declaring a new one
+    job = j          // same
+    go func() {
+        results[idx] = process(job)   // captures idx/job — NOT the loop's i/j
+    }()
+}
+```
+
+This *looks* like it should be fine — after all, isn't `idx` "just holding
+this iteration's `i`"? But look at what `idx = i` actually does: it's a plain
+assignment into a variable that was declared **once**, before the loop. There
+is exactly one `idx` for the whole function, reassigned every iteration —
+exactly the pre-1.22 problem, just handwritten instead of built into the loop
+syntax. Every goroutine's closure captures that same one `idx`/`job` pair, and
+by the time any goroutine actually runs, the loop has usually already
+overwritten them several times over. Symptoms: duplicate results landing in
+the wrong slots, other slots never written at all, and `-race` flagging the
+reassignments racing against the goroutines' reads.
+
+**Why Go 1.22 doesn't help here:** the fix only makes the range loop's *own*
+`i` and `j` fresh per iteration. It has no idea `idx`/`job` exist — they're
+separate, manually-copied variables that live outside the loop's special
+handling. The fix is to delete the copies and close over `i`/`j` directly:
+
+```go
+for i, j := range jobs {
+    go func() {
+        results[i] = process(j)   // captures the loop's OWN i/j — fresh per iteration
+    }()
+}
+```
+
+**The rule to keep:** Go 1.22 protects the loop's *own* iteration variables —
+not anything you copy them into. Whenever a closure captures a variable
+declared outside the loop, check whether that variable is shared across
+iterations before assuming it's safe, no matter which Go version you're on.
+
 ---
 
 ## 6. Data races — the worst bug class in concurrent code
@@ -460,6 +506,75 @@ Two things to internalize about it:
   run tests with it. (One wrinkle: on Windows `-race` needs a C toolchain, so
   in this repo `.\test-race.ps1` runs the tests inside a Linux Docker
   container instead. Same detector, same output.)
+
+### Which shared containers are actually safe for concurrent writes?
+
+The core rule from above — "same memory, at least one write, unsynchronized"
+— sounds like it bans goroutines from ever touching shared state. It doesn't.
+It bans them from touching the *same address*. Whether that happens depends
+on what kind of container you're using, and the answer is genuinely different
+per container. This is not a minor detail — the exercises deliberately walked
+through all three:
+
+| Container | Concurrent writes to *different* keys/indices | Why |
+|---|---|---|
+| **Plain variable** (`int`, etc.) | N/A — there's only one address | Any concurrent write is a race (demo 03's `count++`) |
+| **Map** | **Still unsafe** | A map's internal bucket/hash structure isn't cleanly partitioned by key — a write for one key can touch structure shared with other keys. Go's own runtime enforces this: concurrent map writes can panic with `fatal error: concurrent map read and map write` even under a *clean* run, no `-race` needed (you saw this in ex2). |
+| **Slice, fixed-size, writing by index** | **Safe** | Each index is an independent memory cell. Two goroutines writing `s[3]` and `s[7]` touch different addresses — no overlap, no race. This is what made ex1's `results[i]`, ex5's `sizes[i]`, and ex8's `errs[i]` safe to write *concurrently*, with `wg.Wait()` only needed before the *read* afterward. |
+| **Slice via `append`** | **Unsafe** | `append` doesn't write to a fixed address — it reads the slice's shared (pointer, length, capacity) header, computes a new element position, writes it, then writes the header back. Two goroutines racing through that sequence clobber each other, exactly like `count++` (ex8's original bug). |
+
+**Takeaway:** "can multiple goroutines safely write to this shared thing?" doesn't have one universal answer — check whether the specific operation touches independent memory (safe) or shared bookkeeping/structure (not safe), for the *specific container and operation* in front of you.
+
+### The standard fix when writes really do collide: sharding
+
+When the container itself isn't safe for concurrent writes (a map, an
+accumulator, anything via `append`), the fix used throughout this module's
+exercises has a name: **sharding** (also called "partition, then reduce" — a
+simplified, in-memory MapReduce). The shape is always the same:
+
+1. Each goroutine gets its **own private** copy of whatever it's accumulating
+   into (its own local map, its own local slice) — zero sharing, zero
+   synchronization needed during the parallel phase.
+2. `wg.Wait()` — the one guarantee that every goroutine has finished writing
+   to its own private copy.
+3. **A single-threaded merge pass**, run once, after `Wait()` — combining
+   (`WordFrequency`) or filtering (`ValidateAll`/ex8) every goroutine's
+   private result into the final answer.
+
+**Why this is efficient:** during the parallel phase, nothing is waiting on
+anything else — every goroutine mutates its own private state at full native
+speed. The only costs are memory (N private copies instead of 1) and the
+merge pass at the end (proportional to total accumulated data, done once).
+When each goroutine does substantial work (parsing a document, validating a
+record) relative to the size of its own little map, this trade is close to
+free — full parallelism, no contention, cheap cleanup.
+
+**Where it stops paying off:** if the goroutine count `N` grows very large
+while the work *per* goroutine shrinks (e.g. one goroutine per word instead
+of per document), you're now paying full map/slice overhead per goroutine for
+almost no work each — memory overhead and merge cost can start to dominate.
+The real-world fix is not to keep matching shards to input size, but to
+**cap the number of shards to a small, fixed pool** (e.g. matching
+`GOMAXPROCS`) and have each worker pull many items off a shared queue,
+accumulating into its own private shard. Same sharding idea, fixed shard
+count instead of growing with `N` — this is exactly what a **worker pool**
+is, and it's Module 4's main topic.
+
+**The alternative most real code reaches for first:** a single shared map (or
+accumulator) guarded by a `sync.Mutex` — lock, mutate, unlock, per operation.
+It's simpler to read (no merge step at all) and often *just as efficient in
+practice*, because the lock is only held for a tiny critical section; if the
+surrounding per-goroutine work dominates the total time, the brief
+serialization barely matters. Many engineers reach for the mutex first and
+only move to sharding if profiling actually shows lock contention as a
+bottleneck — sharding pre-emptively, without evidence it's needed, is itself
+a minor anti-pattern. (One tempting shortcut to specifically avoid here:
+`sync.Map`. Despite the name, its own documentation says it's tuned for
+narrow access patterns — keys written once and read often, or disjoint
+key-sets per goroutine — and it typically *underperforms* a plain map with a
+mutex for a write-heavy, overlapping-key workload like word counting.) The
+full mutex-vs-channel-vs-sharding decision framework, with real benchmarks,
+is Module 3.
 
 ---
 

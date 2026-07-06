@@ -23,13 +23,35 @@ package exercises
 
 import "sync"
 
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func ProcessAll(jobs []string, process func(job string) string) []string {
+//		results := make([]string, len(jobs))
+//
+//		var wg sync.WaitGroup
+//		var idx int
+//		var job string
+//		for i, j := range jobs {
+//			idx = i
+//			job = j
+//			wg.Add(1)
+//			go func() {
+//				defer wg.Done()
+//				results[idx] = process(job)
+//			}()
+//		}
+//		wg.Wait()
+//
+//		return results
+//	}
+
 // ProcessAll runs process on every job concurrently; result[i] corresponds
 // to jobs[i]. BUG: all goroutines share one idx and one job variable.
 func ProcessAll(jobs []string, process func(job string) string) []string {
 	results := make([]string, len(jobs))
 
 	var wg sync.WaitGroup
-	
+
 	for i, j := range jobs {
 		wg.Add(1)
 		go func() {

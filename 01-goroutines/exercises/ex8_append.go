@@ -24,23 +24,52 @@ package exercises
 
 import "sync"
 
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func ValidateAll(records []string, validate func(record string) error) []error {
+//		var errs []error
+//
+//		var wg sync.WaitGroup
+//		for _, r := range records {
+//			wg.Add(1)
+//			go func() {
+//				defer wg.Done()
+//				if err := validate(r); err != nil {
+//					errs = append(errs, err) // BUG: unsynchronized shared append
+//				}
+//			}()
+//		}
+//		wg.Wait()
+//
+//		return errs
+//	}
+
 // ValidateAll runs validate on every record concurrently and returns every
 // error encountered (order does not matter). BUG: concurrent unsynchronized
 // append to a shared slice.
 func ValidateAll(records []string, validate func(record string) error) []error {
-	var errs []error
+	errs := make([]error, len(records))
 
 	var wg sync.WaitGroup
-	for _, r := range records {
+	for i, r := range records {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if err := validate(r); err != nil {
-				errs = append(errs, err) // BUG: unsynchronized shared append
+				errs[i] = err // BUG: unsynchronized shared append
+			}else {
+				errs[i] = nil
 			}
 		}()
 	}
 	wg.Wait()
 
-	return errs
+	var out []error
+	for _, er := range errs{
+		if er != nil {
+			out = append(out, er)
+		}
+	}
+
+	return out
 }

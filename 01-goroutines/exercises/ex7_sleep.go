@@ -1,5 +1,7 @@
 package exercises
 
+import "sync"
+
 // Exercise 7 — FIX THE BUG: time.Sleep is not synchronization.
 //
 // This sends a notification to every device and collects the delivery
@@ -24,20 +26,37 @@ package exercises
 //
 // Do not change the function signature.
 
-import "time"
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func NotifyAll(devices []string, msg string, send func(device, msg string) string) []string {
+//		receipts := make([]string, len(devices))
+//
+//		for i, d := range devices {
+//			go func() {
+//				receipts[i] = send(d, msg)
+//			}()
+//		}
+//
+//		time.Sleep(50 * time.Millisecond) // "sends never take longer than this... right?"
+//
+//		return receipts
+//	}
 
 // NotifyAll sends msg to every device concurrently; receipts[i] corresponds
 // to devices[i]. BUG: it guesses how long the sends take instead of knowing.
 func NotifyAll(devices []string, msg string, send func(device, msg string) string) []string {
 	receipts := make([]string, len(devices))
+	var wg sync.WaitGroup
 
 	for i, d := range devices {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			receipts[i] = send(d, msg)
 		}()
 	}
 
-	time.Sleep(50 * time.Millisecond) // "sends never take longer than this... right?"
+	wg.Wait() // "sends never take longer than this... right?"
 
 	return receipts
 }

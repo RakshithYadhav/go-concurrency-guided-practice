@@ -22,6 +22,24 @@ package exercises
 
 import "sync"
 
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func FetchAll(ids []int, fetch func(id int) string) []string {
+//		results := make([]string, len(ids))
+//
+//		var wg sync.WaitGroup
+//		for i, id := range ids {
+//			go func() {
+//				wg.Add(1)
+//				defer wg.Done()
+//				results[i] = fetch(id)
+//			}()
+//		}
+//		wg.Wait()
+//
+//		return results
+//	}
+
 // FetchAll fetches every id concurrently; result[i] corresponds to ids[i].
 // BUG: the WaitGroup is used incorrectly.
 func FetchAll(ids []int, fetch func(id int) string) []string {

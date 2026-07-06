@@ -28,6 +28,12 @@ import (
 //
 // Forbidden: time.Sleep, sync/atomic, sync.Mutex, channels.
 
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func TotalSize(paths []string, sizeOf func(path string) int64) int64 {
+//		panic("implement me")
+//	}
+
 // TotalSize returns the summed size of all paths, fetching sizes concurrently.
 func TotalSize(paths []string, sizeOf func(path string) int64) int64 {
 	var wg sync.WaitGroup

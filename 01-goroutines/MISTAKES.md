@@ -99,7 +99,10 @@ shared-mutable-state race — the same shape solves the map-race here, the
 lost-update-`int` race in the demo, and generalizes to slices, structs,
 counters, anything. The recurring trap is doing the merge **too early**
 (attempt 3) or **serializing away the concurrency** while chasing correctness
-(attempt 4) instead of restructuring *when* `Wait()` is called.
+(attempt 4) instead of restructuring *when* `Wait()` is called. This pattern
+has a name — **sharding** — and its efficiency trade-offs (and the mutex
+alternative) are written up in full in `NOTES.md`, Section 6, "The standard
+fix when writes really do collide: sharding."
 
 ---
 
@@ -152,3 +155,39 @@ Each iteration then gets its own private `i`/`j` under 1.22+ semantics.
 variables — not anything you copy them into. If a closure captures a
 variable declared outside the loop, check whether that variable is shared
 across iterations before trusting it's safe, regardless of Go version.
+
+---
+
+## Exercise 8 — `ValidateAll`
+
+**Same length-vs-capacity mistake as Exercise 1, twice in a row.** First pass
+used `var errs []error` (nil, length 0); second pass used
+`make([]error, 0, len(records))` — length 0 again, just now with reserved
+capacity. Both panicked identically: `index out of range [0] with length 0`
+on `errs[i] = err`. Capacity is reserved backing space for future `append`
+growth; it does **not** make an index valid to assign into directly — only
+length does that. Fix: `make([]error, len(records))` — length equal to the
+final size, same correction as Exercise 1.
+
+**The other half of this exercise, past the panic:** once each goroutine
+writes into its own disjoint index (race-free, same reasoning as every
+indexed-slot exercise so far), the slots for records that pass validation
+stay at the zero value (`nil`, for an `error`). But the function's contract
+is "return every error encountered" — not one slot per record. Fix: a single
+threaded pass **after** `wg.Wait()` that filters the indexed slice down to
+just the non-nil entries. This is the same shape as `WordFrequency`'s
+post-`Wait()` merge step — "shard into slots while concurrent, reduce/filter
+once safe" — just with a filter instead of a combine.
+
+**Pattern to watch for:** length-vs-capacity confusion is apparently a
+recurring one — worth deliberately double-checking any `make([]T, ...)` call
+before moving on: is the second argument what I want the *valid, writable
+length* to be, right now?
+
+**Also worth remembering from this exercise's original bug (the concurrent
+`append`):** a slice is safe for concurrent writes to *disjoint indices*
+(`errs[i] = err` from many goroutines, as fixed above) but **not** safe for
+concurrent `append` (the original bug) — `append` mutates a shared header,
+not a fixed address. Map vs slice vs `append` safety is written up as a
+comparison table in `NOTES.md`, Section 6, "Which shared containers are
+actually safe for concurrent writes?"

@@ -30,6 +30,12 @@ type Result struct {
 	Err    error // nil means healthy
 }
 
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func CheckAll(targets []string, check func(target string) error) []Result {
+//		panic("implement me")
+//	}
+
 // CheckAll checks every target concurrently and returns results in input order.
 func CheckAll(targets []string, check func(target string) error) []Result {
 	var wg sync.WaitGroup
