@@ -100,3 +100,55 @@ lost-update-`int` race in the demo, and generalizes to slices, structs,
 counters, anything. The recurring trap is doing the merge **too early**
 (attempt 3) or **serializing away the concurrency** while chasing correctness
 (attempt 4) instead of restructuring *when* `Wait()` is called.
+
+---
+
+## Exercise 3 — `FetchAll`
+
+**`wg.Add(1)` was called INSIDE the goroutine instead of before `go`.**
+`go func(){...}()` only *schedules* the goroutine — the main goroutine keeps
+running its own next line without pausing for it. So after the loop finished
+launching all goroutines, the main goroutine could reach `wg.Wait()` while
+the counter's value depended entirely on how many goroutines had happened to
+get a scheduler turn and reach their own `Add(1)` line first — anywhere from
+zero to all of them. `Wait()` returning as soon as the counter hit zero (even
+via a partial, in-flight count) meant results could go missing, and `Add`
+racing with `Wait`'s read of the counter is itself a documented misuse of
+`sync.WaitGroup` (`go vet` on Go 1.26 flags this exact shape statically).
+**Fix:** move `wg.Add(1)` to the loop body, before `go`, in the main
+goroutine — so it happens-before the matching `Wait()`, unconditionally.
+
+**Pattern to watch for:** `Add` and `Wait` are not "run in the order written"
+— they're two independently-scheduled pieces of code, and WaitGroup's actual
+contract is that every `Add` that raises the counter above zero must
+happen-before the matching `Wait()`. `Add` inside the goroutine can never
+guarantee that.
+
+---
+
+## Exercise 6 — `ProcessAll`
+
+**Copied the range loop's own variables (`i`, `j`) into separate variables
+(`idx`, `job`) declared OUTSIDE the loop, then had every goroutine's closure
+capture those outer copies instead of the range variables themselves.**
+`idx`/`job` were reassigned — not redeclared — every iteration, so there was
+exactly one `idx` and one `job` for the whole function, and every goroutine's
+closure held a live wire to that same pair. By the time any goroutine
+actually ran, the loop had usually already overwritten `idx`/`job` several
+times over. Result: duplicate answers landing in the wrong slots, other slots
+left at their zero value, plus `-race` flagging the reassignments racing
+against the goroutines' reads.
+
+**Why Go 1.22 didn't save this even on 1.26:** the 1.22 fix only makes the
+range loop's *own* `i`/`j` fresh per iteration. It has no idea `idx`/`job`
+exist — they're separate, manually-copied variables outside the loop that
+keep getting overwritten. Copying a loop variable into an outer variable and
+capturing *that* recreates the pre-1.22 bug by hand, on any Go version.
+
+**Fix:** delete the outer `idx`/`job` copies; close over `i`/`j` directly.
+Each iteration then gets its own private `i`/`j` under 1.22+ semantics.
+
+**Pattern to watch for:** the 1.22 fix protects the loop's *own* iteration
+variables — not anything you copy them into. If a closure captures a
+variable declared outside the loop, check whether that variable is shared
+across iterations before trusting it's safe, regardless of Go version.
