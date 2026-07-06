@@ -50,6 +50,16 @@ starting a new module — the same handful of patterns (loop-position vs
 task-count, where a `defer` actually fires, merging shared state too early or
 too late) show up again and again in new disguises.
 
+## Original bug/skeleton, kept above every fix
+
+Once an exercise is solved, the original buggy (or unimplemented) code isn't
+deleted — it's kept as an `// ORIGINAL (before fix)` comment block directly
+above the working solution, in the same file. Two reasons: it lets you (or
+anyone else) re-attempt the exercise from its actual starting point later
+without needing git history, and a fixed file with no visible bug teaches
+nothing to someone reading it cold. When you solve a new exercise, this gets
+added as part of wrapping it up — you don't need to do it yourself.
+
 ## Want more exercises?
 
 Just ask. More can be generated anytime — either fresh scenarios on concepts

@@ -52,3 +52,5 @@ go test ./01-goroutines/...                # quick native test run (NO race dete
 | Date | What happened |
 |------|---------------|
 | 2026-07-05 | Repo scaffolded; Module 1 opened |
+| 2026-07-06 | Module 1: 7 of 9 exercises solved (ex4, ex9 + quiz pending); MISTAKES.md started |
+| 2026-07-06 | Module 2 (channels) opened: notes, 4 demos, 5 exercises, 10 drills |
