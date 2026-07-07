@@ -1,5 +1,7 @@
 package exercises
 
+import "sync"
+
 // Exercise 4 — IMPLEMENT: fan-in (merge N channels into one).
 //
 // You have several producers, each streaming values on its own channel
@@ -25,8 +27,35 @@ package exercises
 //
 // Forbidden: time.Sleep, busy-wait polling with default.
 
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func Merge(inputs ...<-chan int) <-chan int {
+//		panic("implement me")
+//	}
+
 // Merge fans-in every value from all inputs onto one output channel, which
 // closes only when every input has closed.
 func Merge(inputs ...<-chan int) <-chan int {
-	panic("implement me")
+	results := make(chan int)
+	var wg sync.WaitGroup
+	for _, input := range inputs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				v, ok := <-input
+				if !ok {
+					break
+				}
+				results <-v
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait() // all senders provably finished
+		close(results) // single closer, after the last send
+	}()
+
+	return results
 }

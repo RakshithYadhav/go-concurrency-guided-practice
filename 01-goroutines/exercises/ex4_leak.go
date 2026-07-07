@@ -22,7 +22,7 @@ package exercises
 // FirstResult queries all replicas concurrently and returns whichever answers
 // first. BUG: every call leaks len(queries)-1 goroutines, forever.
 func FirstResult(queries []string, search func(query string) string) string {
-	results := make(chan string)
+	results := make(chan string, len(queries))
 	for _, q := range queries {
 		go func() {
 			results <- search(q)

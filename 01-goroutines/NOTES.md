@@ -680,7 +680,102 @@ process dies. In a long-running server, that's a slow-motion outage.
 
 ---
 
-## 9. Interview questions
+## 9. Preview: fixing a goroutine leak with a buffered channel (exercise 4)
+
+Exercise 4's `FirstResult` needs one Module-2 concept to fix properly. Full
+channel theory lives in `../02-channels/NOTES.md` — this is just enough to
+understand *this* fix, plus the wrong turns worth knowing about.
+
+**The setup:** `FirstResult` starts one goroutine per query, every goroutine
+tries to send its answer on a shared channel, and the function receives
+**exactly once** — whichever goroutine's send gets there first "wins."
+
+**The bug:** `results := make(chan string)` creates an **unbuffered**
+channel — zero storage. A send on it is a handshake: it only completes the
+instant another goroutine is actively receiving. The winner's send matches
+the one receive and the function returns. Every other goroutine is still
+out there trying to send — but nobody will ever receive again, since that
+line only runs once. Those sends **block forever**. Not a crash, not an
+error — `len(queries)-1` goroutines per call, silently stuck, forever.
+
+**The tempting wrong fix: close the channel after receiving.** This looks
+reasonable — "tell the losers we're done" — but closing is a promise that
+*nobody will ever send again*, and `FirstResult` has no way to know that's
+true; the other goroutines might still be mid-flight, fully intending to
+send. Proven empirically: doing this causes every remaining goroutine to hit
+`panic: send on closed channel` the moment it tries to send — and an
+unrecovered panic in *any* goroutine kills the *entire process*. That's
+worse than the leak: a stuck goroutine wastes memory silently, but this
+crashes the whole program.
+
+**A partial fix that isn't enough: buffer size 1.** A **buffered** channel
+(`make(chan string, n)`) only blocks a send when the buffer is full — with
+free space, a value can be dropped in and the sender can move on with no
+receiver needed at that instant. Buffer size 1 lets the *winner* succeed
+immediately, gets drained by the one receive, and then lets exactly **one
+more** goroutine slip into that now-empty slot. But that slot is never
+drained a second time — so every goroutine after that still blocks forever.
+Measured directly: with 5 queries and buffer 1, only 2 goroutines per call
+ever exit safely; the other 3 still leak (10 calls measured 31 live
+goroutines afterward, not back down near the 1 baseline).
+
+**The actual fix:** size the buffer to `len(queries)` — enough room for
+*every* goroutine's value to sit in the buffer at once, no matter how their
+sends happen to interleave in time. Every send then succeeds immediately;
+the winner's value gets received as before, and the other values just sit
+in unused buffer slots — which is completely fine. Nothing is ever required
+to read them, and once the channel is unreferenced it's garbage collected
+normally, unread values and all.
+
+The general reasoning, worth keeping: whenever N goroutines might all try to
+hand off a value at once but only some (or one) of those values will ever
+be read, the channel needs buffer capacity for the worst case — all N firing
+before anyone's ready to receive — not just "enough for the common case."
+
+### Why this is a genuinely nasty bug, not just a nitpick
+
+It's worth being concrete about the real-world cost, because "a few stuck
+goroutines" can sound harmless in isolation.
+
+Imagine `FirstResult` checking 5 replicas on every incoming request to a
+real service handling a modest 100 requests/second. Each call leaks 4
+goroutines (5 replicas minus the 1 winner):
+
+- 100 req/s × 4 leaked → **400 new stuck goroutines every second**
+- After 1 minute: 24,000 leaked. After 1 hour: over **1.4 million**.
+
+Every one of those goroutines permanently holds its own stack (starts
+around 2KB, Section 1) plus whatever its closure captured — and since it can
+never reach a `return`, none of that memory is ever eligible for garbage
+collection. Memory climbs monotonically for as long as the process runs.
+Eventually: out-of-memory, and the process gets killed — or an orchestrator
+like Kubernetes kills and restarts the pod, which just resets the clock
+without fixing anything. This is exactly what "slow-motion OOM" means: not
+an immediate crash, but a service that mysteriously degrades and falls over
+after hours or days — a genuinely nasty class of bug to diagnose *because*
+it's slow and silent, with nothing that looks like an error anywhere in the
+logs.
+
+How this actually gets noticed in a real system, before it OOMs: a
+**goroutine-count metric** (`runtime.NumGoroutine()`, or exposed via
+`/debug/pprof`) that climbs steadily and never comes back down even when
+traffic is flat — the classic leak signature — or **`go tool pprof`'s
+goroutine profile** (Module 7) showing thousands of goroutines all parked at
+the exact same line, `results <- search(q)`, which is close to a smoking gun
+once you know to look for it.
+
+**The one case where it genuinely wouldn't matter:** a short-lived script
+that calls `FirstResult` once and exits immediately. When `main` returns,
+the OS tears down the *entire* process — leaked goroutines included — so
+nothing is ever actually harmed. The reason this bug matters specifically
+for **long-running processes** (servers, background workers, anything that
+keeps running and keeps calling the function) is that nothing reclaims those
+stuck goroutines until the whole process dies. The bug is identical either
+way; only the blast radius depends on how long the process stays alive.
+
+---
+
+## 10. Interview questions
 
 At review time you answer these out loud, no notes. The narration practice
 matters as much as the code.
@@ -705,7 +800,7 @@ matters as much as the code.
 
 ---
 
-## 10. Your files
+## 11. Your files
 
 ```
 demo/01-no-wait/        main returns before goroutines run — run it first

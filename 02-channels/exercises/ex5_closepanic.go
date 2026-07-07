@@ -1,5 +1,7 @@
 package exercises
 
+import "sync"
+
 // Exercise 5 — FIX THE BUG: who is allowed to close?
 //
 // StreamAll fans out one goroutine per source, all sending filenames into a
@@ -25,19 +27,44 @@ package exercises
 //
 // Do not change the function signature.
 
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func StreamAll(sources [][]string) <-chan string {
+//		out := make(chan string)
+//
+//		for _, src := range sources {
+//			go func() {
+//				for _, filename := range src {
+//					out <- filename
+//				}
+//				close(out) // BUG: three senders, three closes, zero coordination
+//			}()
+//		}
+//
+//		return out
+//	}
+
 // StreamAll merges the filenames from every source onto one channel.
 // BUG: every source goroutine closes the shared channel itself.
 func StreamAll(sources [][]string) <-chan string {
 	out := make(chan string)
+	var wg sync.WaitGroup
 
 	for _, src := range sources {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			for _, filename := range src {
 				out <- filename
 			}
-			close(out) // BUG: three senders, three closes, zero coordination
+			 // BUG: three senders, three closes, zero coordination
 		}()
 	}
+
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
 
 	return out
 }

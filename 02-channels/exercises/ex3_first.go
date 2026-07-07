@@ -1,4 +1,6 @@
 package exercises
+import ("errors"
+"time")
 
 // Exercise 3 — IMPLEMENT: fastest replica wins, with a timeout, no leaks.
 //
@@ -22,10 +24,21 @@ package exercises
 //
 // Forbidden: time.Sleep.
 
-import "time"
-
 // FirstResponse queries all replicas concurrently and returns the first
 // answer, or an error if none arrives within timeout.
 func FirstResponse(replicas []string, query func(replica string) string, timeout time.Duration) (string, error) {
-	panic("implement me")
+	results := make(chan string, len(replicas))
+
+	for _, replica := range replicas {
+		go func() {
+			results <- query(replica)
+		}()
+	}
+
+	select {
+	case v := <-results:
+		return v, nil
+	case <-time.After(timeout):
+		return "", errors.New("Error")
+	}
 }

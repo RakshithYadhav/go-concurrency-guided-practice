@@ -68,8 +68,43 @@ goroutine B:                                        x := <-ch
                               ────► handoff happens HERE, both continue ────►
 ```
 
+### What "blocks" actually means
+
+Worth being precise about this, since the whole module rests on it:
+**"blocks" means the goroutine's execution pauses at that exact line and
+does not proceed to the next line — at all — until the operation can
+complete.**
+
+```go
+fmt.Println("before")
+ch <- 42                    // blocks HERE
+fmt.Println("after")        // does NOT run until the line above completes
+```
+
+If nobody ever receives from `ch`, `"after"` never prints — not "eventually
+after a delay," but never, unless something changes. It behaves like any
+other synchronous call that doesn't return until its work is done (the same
+way `time.Sleep(2 * time.Second)` holds up the next line for 2 seconds) —
+your intuition of "like a sync call" is exactly right.
+
+**The one crucial precision: it's the *goroutine* that pauses, not the whole
+program.** If 10 goroutines are running and one of them blocks on a channel
+send with no receiver, only *that* goroutine freezes — the other 9 keep
+running completely normally, untouched. Blocking in Go is a per-goroutine
+event, never a program-wide one.
+
+**And it's a cheap pause, not a wasteful one.** Recall Module 1 Section 7:
+when a goroutine blocks on a channel, the runtime **parks** it — removes it
+entirely from the scheduler's run queue, at essentially zero cost — and the
+OS thread that was running it immediately picks up some other runnable
+goroutine instead. The parked goroutine burns zero CPU while waiting; the
+runtime wakes it back up the instant the channel operation becomes possible
+(a receiver shows up, or buffer space frees), and it resumes exactly where
+it left off.
+
 ▶ **Run:** `go run ./02-channels/demo/01-unbuffered` — timestamps show the
-sender genuinely frozen until the receiver shows up 2 seconds later.
+sender genuinely frozen until the receiver shows up 2 seconds later; that
+"frozen" is precisely the pause just described.
 
 This blocking is a *feature*, not a limitation. You already exploited it in
 Module 1's ex9 test (`done <- ...` / `<-done` to detect a hang): the receive
@@ -290,6 +325,61 @@ simply **blocks**, patiently waiting for a receiver — it doesn't error, and
 it doesn't need `return ch` to have "already happened" in some strict sense.
 The channel's own blocking behavior is the synchronization; you never need
 to reason about which line technically ran first.
+
+### One goroutine, or N? Two separate questions, not one
+
+**"Do I need a goroutine at all?"** and **"how many goroutines?"** get
+conflated constantly — worth pulling apart explicitly, because they have
+different answers.
+
+**Question 1: do I need a goroutine at all?** If a function returns a
+channel and streams values into it, the answer is always **yes, at least
+one** — for a purely structural reason, not a performance one. The caller
+can only start receiving *after* the function returns the channel to them.
+An unbuffered send blocks until a receiver exists. So sending directly in
+the function's own body, before `return`, creates the exact catch-22 from
+the generator pattern above: the send waits for a receiver that can't exist
+until the function returns, and the function can't return until the send
+completes. The only way out is to make "send the values" and "return the
+channel" two independently-scheduled pieces of code — which is what a
+goroutine is for. This is true even with a single source (`Generate`,
+`Fibonacci`); the alternative (precompute everything into a big-enough
+buffer, skip the goroutine) is the "buffer sized to fit everything"
+antipattern — it defeats genuine streaming and doesn't scale to something
+large or unbounded.
+
+**Question 2: exactly one goroutine, or one per source?** This is a
+completely separate decision, and it's the same tradeoff you already made
+choosing between `WaitGroup` and channels in Module 1: **does anything here
+need to make progress independently of anything else?**
+
+- **Exactly one goroutine** — when there's genuinely one ordered sequence to
+  produce, especially when later values depend on earlier ones (`Fibonacci`:
+  you cannot compute term #7 without already having #5 and #6 — there is
+  nothing to parallelize; a single goroutine looping in order *is* the whole
+  job). Using N goroutines here wouldn't just be unnecessary, it would be
+  actively wrong — concurrent, unordered goroutines can't respect a
+  dependency chain, and can't guarantee the order requirement 2 usually
+  demands.
+- **One goroutine per source** — when there are multiple genuinely
+  independent, potentially-blocking things, and you don't want a slow one to
+  hold up the others. `CheckAll` (Module 1): checking one target shouldn't
+  delay checking another. `Merge`'s fan-in (exercise 4): each input channel
+  is fed by its own independent producer on its own unpredictable schedule —
+  a single goroutine trying to fully drain input #1 before even looking at
+  input #2 would stall on a slow/blocked input while other inputs sit ready
+  with data, which defeats the entire point of fan-in ("any order across
+  inputs" — Merge's requirement 1).
+
+**The question to ask yourself, concretely:** *if I imagine several of these
+things happening at once, is there any real reason one might have to wait on
+another, or could each one legitimately proceed at its own pace?* Sequential
+dependency (each value needs the last one) or literally one source →
+one goroutine. Independent sources that shouldn't block each other → one
+goroutine per source. The "wait for everyone, then close" coordination
+(`WaitGroup` + `close`, Section 4) is a separate concern layered on top of
+whichever choice you make — it decides when it's safe to close, not how many
+senders you need in the first place.
 
 ## 5. Channel direction in signatures
 

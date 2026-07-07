@@ -129,6 +129,56 @@ guarantee that.
 
 ---
 
+## Exercise 4 — `FirstResult`
+
+**The original bug:** `results := make(chan string)` (unbuffered) with
+`len(queries)` goroutines each trying to send once, but only one `<-results`
+ever runs. An unbuffered send is a handshake — it only completes when a
+receiver is actively waiting. The winner's send matches the one receive;
+every other goroutine's send then waits for a receiver that will never come
+again. `len(queries)-1` goroutines leaked, per call, forever — no crash, no
+error, just goroutines silently stuck.
+
+**Wrong turn 1: `close(results)` right after the one receive.** Reasonable
+instinct — "tell the losers we're done" — but closing is a promise that
+nobody will send again, and the losing goroutines might still be mid-flight,
+fully intending to send. Proven with a standalone repro:
+`results <- search(q)` from a goroutine that hasn't sent yet, after
+`close(results)` has already run, produced `panic: send on closed channel`
+for every remaining goroutine. **Worse than the leak** — an unrecovered
+panic in *any* goroutine kills the entire process, whereas the original
+leak just wasted memory silently.
+
+**Wrong turn 2: `make(chan string, 1)` — a buffer, but too small.** A
+buffered send only blocks when the buffer is full, so this let the winner
+succeed instantly, and then let exactly **one more** goroutine slip into the
+slot freed by the single receive. But that slot is never drained a second
+time, so every goroutine after that still blocked forever. Measured
+directly: 5 queries, buffer 1, 10 calls → 31 live goroutines afterward
+(should settle back near the 1-goroutine baseline). Only 2 of 5 goroutines
+per call were actually safe — an improvement over the original 4 leaked, but
+still a leak.
+
+**Fix:** `make(chan string, len(queries))` — buffer sized for the worst
+case, where all `len(queries)` goroutines might try to send before anyone's
+ready to receive. Every send then succeeds immediately regardless of timing;
+the winner's value gets received as before, and the rest sit unread in spare
+buffer slots, which is completely fine — nothing is ever required to read
+them, and the whole channel gets garbage collected normally once
+unreferenced.
+
+**Pattern to watch for:** when N goroutines might all try to hand off a
+value at once but only some of those values will ever be consumed, the
+channel needs buffer capacity for the *worst-case simultaneous* arrival, not
+"enough for the common case" — buffer size 1 works fine right up until two
+goroutines are actually racing, which is exactly when you need it most.
+Also: a fix that trades a silent leak for a process-crashing panic is a
+strictly worse trade, even though "no more leaked goroutines" sounds like
+progress — check what NEW failure mode a fix introduces, not just whether it
+removes the one you were looking at.
+
+---
+
 ## Exercise 6 — `ProcessAll`
 
 **Copied the range loop's own variables (`i`, `j`) into separate variables
