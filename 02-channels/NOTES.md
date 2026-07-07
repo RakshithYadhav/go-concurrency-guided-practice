@@ -177,9 +177,9 @@ v, ok := <-ch   // the "comma-ok" form
 - Channel **closed and drained** → `v` = the **zero value** of the type,
   `ok` = `false` — immediately, no blocking
 
-That second behavior is load-bearing: a closed channel **never blocks a
-receiver again**. It hands out zero values with `ok=false` forever. (And
-note the subtlety: close doesn't destroy buffered values — receivers first
+That second behavior matters a lot: a closed channel **never blocks a
+receiver again**. It hands out zero values with `ok=false` forever. (One
+detail to note: close doesn't throw away buffered values — receivers first
 drain whatever's still in the buffer with `ok=true`, and only *then* start
 getting `ok=false`.)
 
@@ -271,7 +271,7 @@ closed channel, closing twice, closing nil. The two "blocks forever" on nil
 look useless — until Section 6 shows the `select` trick that makes a nil
 channel *deliberately* useful.
 
-▶ **Run:** `go run ./02-channels/demo/03-close-range` — close semantics,
+▶ **Run:** `go run ./02-channels/demo/03-close-range` — how close behaves,
 buffer draining, comma-ok, and a recovered send-on-closed panic, all live.
 
 ### The generator/producer pattern: send in a goroutine, return the channel
@@ -328,9 +328,9 @@ to reason about which line technically ran first.
 
 ### One goroutine, or N? Two separate questions, not one
 
-**"Do I need a goroutine at all?"** and **"how many goroutines?"** get
-conflated constantly — worth pulling apart explicitly, because they have
-different answers.
+**"Do I need a goroutine at all?"** and **"how many goroutines?"** sound
+like one question, but they are two — and they have different answers.
+Let's take them one at a time.
 
 **Question 1: do I need a goroutine at all?** If a function returns a
 channel and streams values into it, the answer is always **yes, at least
@@ -606,7 +606,7 @@ space is guaranteed); for every `range`, know who closes.
 
 ```
 demo/01-unbuffered/     the handshake — sender provably frozen until receiver arrives
-demo/02-buffered/       mailbox semantics — watch exactly which send blocks
+demo/02-buffered/       the mailbox in action — watch exactly which send blocks
 demo/03-close-range/    close, buffer draining, comma-ok, send-on-closed panic
 demo/04-select/         multiplexing, randomness, default, timeout
 exercises/              YOUR work — see exercises/README.md

@@ -664,7 +664,7 @@ Not "whenever things should be fast". The three legitimate triggers:
    concurrently and total time ≈ the slowest one instead of the sum.
    (Exercise 1 is exactly this.)
 2. **Background work** — the caller doesn't need the result *now*. Your
-   shippio importer is the canonical example: the HTTP handler returns
+   shippio importer is the perfect real example: the HTTP handler returns
    `202 Accepted` immediately and worker goroutines do the import later.
 3. **CPU parallelism** — genuinely CPU-bound work split across cores. Only
    pays off if the work is big enough to dwarf the coordination overhead.
@@ -747,7 +747,8 @@ goroutines (5 replicas minus the 1 winner):
 Every one of those goroutines permanently holds its own stack (starts
 around 2KB, Section 1) plus whatever its closure captured — and since it can
 never reach a `return`, none of that memory is ever eligible for garbage
-collection. Memory climbs monotonically for as long as the process runs.
+collection. Memory use only ever grows — it never comes back down — for as
+long as the process runs.
 Eventually: out-of-memory, and the process gets killed — or an orchestrator
 like Kubernetes kills and restarts the pod, which just resets the clock
 without fixing anything. This is exactly what "slow-motion OOM" means: not
