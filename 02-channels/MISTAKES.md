@@ -90,6 +90,36 @@ the latest bug — needs to change, the same trap as Module 1's
 
 ---
 
+## Exercise 2 — `CollectSquares`
+
+The original bug (no `close` anywhere → `range` hangs forever, no error) was
+diagnosed correctly right away. The fix took one wrong intermediate stop.
+
+**Wrong attempt: `close(squares)` added, but placed in `CollectSquares`'s
+own body, immediately after starting the goroutine — not inside it.**
+`panic: send on closed channel`. `go func(){...}()` only *schedules* the
+goroutine; it doesn't pause for it to do anything. So `close` ran almost
+instantly — before the goroutine had necessarily sent even its first
+value — and whenever the goroutine did run and tried to send, the channel
+was already closed. Exactly the same "who's allowed to close, and what do
+they need to know first" question as `ex5`/`Merge`, just showing up a
+second time in a single-sender shape instead of multi-sender.
+
+**Fix:** move `close(squares)` to the last line *inside* the goroutine,
+after its own `for` loop finishes. With exactly one sender, no `WaitGroup`
+is needed at all — that goroutine alone always knows for certain when it's
+safe to close: the instant its own loop ends. Passes both tests, clean
+under `-race` ×10.
+
+**Pattern to watch for:** "add a `close` call" is not, by itself, a fix —
+*where* it's placed relative to the actual sending is the entire question.
+A `close` placed anywhere other than "the last thing the sender does, after
+it's truly done sending" either closes too early (this bug) or never closes
+at all (the original bug) — there's no safe middle option for a
+single-sender producer.
+
+---
+
 ## Exercise 4 — `Merge` (fan-in)
 
 Four attempts, each surfacing a genuinely different concept — good exercise

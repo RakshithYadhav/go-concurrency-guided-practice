@@ -18,6 +18,24 @@ package exercises
 //
 // Do not change the function signature.
 
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func CollectSquares(nums []int) []int {
+//		squares := make(chan int)
+//
+//		go func() {
+//			for _, n := range nums {
+//				squares <- n * n
+//			}
+//		}()
+//
+//		var results []int
+//		for sq := range squares {
+//			results = append(results, sq)
+//		}
+//		return results
+//	}
+
 // CollectSquares returns the squares of nums, computed by a producer
 // goroutine and streamed over a channel. BUG: it never returns.
 func CollectSquares(nums []int) []int {
@@ -27,8 +45,9 @@ func CollectSquares(nums []int) []int {
 		for _, n := range nums {
 			squares <- n * n
 		}
+		close(squares)
 	}()
-	close(squares)
+
 	var results []int
 	for sq := range squares {
 		results = append(results, sq)
