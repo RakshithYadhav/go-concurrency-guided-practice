@@ -57,7 +57,6 @@ func StreamAll(sources [][]string) <-chan string {
 			for _, filename := range src {
 				out <- filename
 			}
-			 // BUG: three senders, three closes, zero coordination
 		}()
 	}
 

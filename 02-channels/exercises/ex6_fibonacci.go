@@ -32,7 +32,28 @@ package exercises
 //  - More than one sending goroutine. Given each value needs the previous
 //    two, what would concurrent, unordered goroutines even compute?
 
+// ORIGINAL (before fix) — kept for revision / re-attempting from scratch:
+//
+//	func Fibonacci(n int) <-chan int {
+//		panic("implement me")
+//	}
+
 // Fibonacci streams the first n Fibonacci numbers, in order, then closes.
 func Fibonacci(n int) <-chan int {
-	panic("implement me")
+	fib := make(chan int)
+
+	go func() {
+		fibA := make([]int, n)
+		for i := 0; i < n; i++ {
+			if i == 0 || i == 1 {
+				fibA[i] = i
+			} else {
+				fibA[i] = fibA[i-1] + fibA[i-2]
+			}
+			fib <- fibA[i]
+		}
+		close(fib)
+	}()
+
+	return fib
 }

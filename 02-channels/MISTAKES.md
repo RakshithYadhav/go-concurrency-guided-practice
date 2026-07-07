@@ -144,3 +144,61 @@ so `Merge` can return before that coordination finishes. Missing any one of
 the three produces a different failure (wrong data, deadlock, or partial
 data) — worth checking all three explicitly next time a fan-in-shaped
 function is needed, rather than fixing one and assuming the others are fine.
+
+---
+
+## Exercise 6 — `Fibonacci`
+
+Four attempts, each addressing one distinct layer — pure Go syntax, then
+correctness of the actual math, then two separate edge-case failures caused
+by the same root design flaw.
+
+**Attempt 1: `for i = 0, i < n, i++`** — commas instead of semicolons
+between the loop's three clauses, and `=` instead of `:=` on an undeclared
+`i`. Compiler: `syntax error: unexpected ++, expected {`. Go's C-style `for`
+needs `init; condition; post` with semicolons — commas don't separate
+clauses at all, so the parser tried to read the whole thing as one
+expression and choked on `i++`. Same `:=`-vs-`=` rule as Module 1 `ex1`'s
+very first mistake, recurring.
+
+**Attempt 2: syntax fixed, but `fib <- (i - 1) + (i - 2)` — used the loop
+index itself as if it were the previous two Fibonacci values.**
+`(i-1)+(i-2)` simplifies to `2i-3`, a straight line — it only coincidentally
+matched the real sequence at `i=2`, then diverged immediately
+(`0 1 1 3 5 7 9...` instead of `0 1 1 2 3 5 8...`). The bug: nothing was
+actually *remembered* between iterations — the formula derived a value from
+*position*, not from what was genuinely sent last. Also present in this
+attempt: `fib <- 0` and `fib <- 1` ran unconditionally before checking `n`
+at all, so `Fibonacci(0)` returned `[0 1]` instead of nothing, and
+`Fibonacci(1)` returned `[0 1]` instead of `[0]`.
+
+**Attempt 3: introduced a `fibA []int` slice with a real recurrence
+(`fibA[i-1] + fibA[i-2]`) — correct math this time — but `fibA[0] = 0` and
+`fibA[1] = 1` were still hardcoded, unconditional lines before the loop.**
+`make([]int, n)` with `n=0` gives a zero-length slice; writing `fibA[0]`
+into it panicked: `index out of range [0] with length 0`. Fixing the *math*
+didn't fix the underlying issue from attempt 2 — the first two values were
+still special-cased outside any loop tied to `n`.
+
+**Attempt 4: moved the base cases inside an `if i == 0 || i == 1` branch —
+but the surrounding loop's own init clause still said `i := 2`.**
+Since `i` could never actually be `0` or `1` inside a loop starting at `2`,
+that branch was dead code — unreachable no matter what `n` was. Net effect:
+`fibA[0]`/`fibA[1]` silently stayed at their zero-value default (`0`, `0`
+instead of `0`, `1`), every later `else` computation inherited that wrong
+foundation (`fibA[2] = 0+0 = 0`), and the loop never even ran for `n=1`
+(`2 < 1` is false), so `Fibonacci(1)` returned nothing.
+
+**Fix:** change the loop's own start to `i := 0`, so the `if i == 0 || i ==
+1` branch (whose *contents* were correct since attempt 4) can actually
+execute. Passes all 5 tests, clean under `-race` ×10.
+
+**Pattern to watch for:** three of these four attempts were fixed at the
+wrong layer — attempt 2 tried to patch the *math* while leaving the
+*structural* problem (hardcoded values outside any `n`-driven loop) intact;
+attempt 4 tried to patch the *structure* (an `if` for the base cases) while
+leaving a *contradicting* loop bound in place right next to it. Worth a
+habit: when adding a special-case branch inside a loop, immediately check
+whether the loop's own bounds can actually reach that branch at all — code
+that "looks like" it handles a case but can never execute it is easy to
+miss on read-through and only shows up as a test failure.
