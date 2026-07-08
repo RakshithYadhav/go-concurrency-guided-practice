@@ -1,5 +1,10 @@
 package exercises
 
+import (
+	"sync"
+	"sync/atomic"
+  )
+
 // Exercise 1 — IMPLEMENT: one counter, two synchronization strategies.
 //
 // Both constructors must return a Counter that is exact under heavy
@@ -31,12 +36,42 @@ type Counter interface {
 	Value() int64
 }
 
+type CounterWithMutex struct {
+	mu sync.RWMutex
+	count int64
+}
+
+func (cs *CounterWithMutex) Inc() {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.count++
+	
+}
+
+func (cs *CounterWithMutex) Value() int64{
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.count
+}
+
+type CounterWithAtomic struct {
+	count atomic.Int64
+}
+
+func (cs *CounterWithAtomic) Inc() {
+	cs.count.Add(1)
+}
+
+func (cs *CounterWithAtomic) Value() int64{
+	return cs.count.Load()
+}
+
 // NewMutexCounter returns a Counter guarded by a sync.Mutex.
 func NewMutexCounter() Counter {
-	panic("implement me")
+	return &CounterWithMutex{}
 }
 
 // NewAtomicCounter returns a Counter backed by sync/atomic.
 func NewAtomicCounter() Counter {
-	panic("implement me")
+	return &CounterWithAtomic{}
 }
