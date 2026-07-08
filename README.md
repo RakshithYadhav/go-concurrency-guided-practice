@@ -1,5 +1,8 @@
 # Go Concurrency Mastery
 
+> **Track 1 of the Backend Mastery roadmap** — see [`../BACKEND-MASTERY.md`](../BACKEND-MASTERY.md)
+> for the full 11-track plan this belongs to.
+
 Hands-on curriculum for mastering Go concurrency the way real backend engineers
 use it: worker pools, pipelines, graceful shutdown, keyed locking — plus the
 interview-grade theory and runtime internals behind them.
