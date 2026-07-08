@@ -1,5 +1,7 @@
 package exercises
 
+import "sync"
+
 // Exercise 2 — FIX THE BUG: check-then-act on a shared cache (TOCTOU).
 //
 // PriceCache memoizes slow price lookups: first request for a symbol calls
@@ -31,6 +33,7 @@ package exercises
 // PriceCache memoizes fetch results per symbol. BUG: unsynchronized
 // check-then-act on a shared map.
 type PriceCache struct {
+	mu     sync.Mutex
 	prices map[string]float64
 }
 
@@ -41,6 +44,8 @@ func NewPriceCache() *PriceCache {
 
 // GetOrFetch returns the cached price for symbol, calling fetch on a miss.
 func (c *PriceCache) GetOrFetch(symbol string, fetch func(symbol string) float64) float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if price, ok := c.prices[symbol]; ok {
 		return price
 	}
