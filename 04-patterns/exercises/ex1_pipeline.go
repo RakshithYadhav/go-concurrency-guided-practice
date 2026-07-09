@@ -16,18 +16,60 @@ package exercises
 //
 // Do not change signatures.
 
+// ORIGINAL (before fix): ranged over the slice like a channel, sending
+// indices instead of values —
+//
+//	for num := range nums {
+//		out <- num   // sent 0,1,2,3,4 instead of 3,1,4,1,5
+//	}
+//
+// Slice range with one variable gives the INDEX; channel range with one
+// variable gives the VALUE. Fixed with `for _, num := range nums`.
+
 // Generate returns a channel that emits each of nums, then closes.
 func Generate(nums ...int) <-chan int {
-	panic("implement me")
+	out := make(chan int)
+
+	go func() {
+		defer close(out)
+		for _, num := range nums {
+			out <- num
+		}
+
+	}()
+
+	return out
 }
 
 // Square returns a channel of v*v for every v received from in.
 func Square(in <-chan int) <-chan int {
-	panic("implement me")
+	out := make(chan int)
+
+	go func() {
+		defer close(out)
+		for num := range in {
+			out <- num * num
+		}
+
+	}()
+
+	return out
 }
 
 // Keep returns a channel that passes through only values where pred(v)
 // is true.
 func Keep(in <-chan int, pred func(int) bool) <-chan int {
-	panic("implement me")
+	out := make(chan int)
+
+	go func() {
+		defer close(out)
+		for num := range in {
+			if pred(num) {
+				out <- num
+			}
+		}
+
+	}()
+
+	return out
 }
