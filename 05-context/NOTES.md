@@ -29,6 +29,69 @@ the sequence your shippio server runs when Kubernetes sends it SIGTERM.
 That's the second half of this module, and it's where every pattern from
 Modules 1–4 finally clicks together into one production shape.
 
+### The story that makes the need obvious
+
+A user hits your search endpoint. Your handler fans out: one Postgres
+query (heavy — ~10 seconds on a bad day), one call to a recommendations
+service, one cache lookup. Half a second in, the user closes the tab.
+
+Now ask: **who tells the database to stop?**
+
+Without context: nobody. The connection to the user is gone, but your
+handler doesn't know that, so it keeps waiting. Postgres keeps grinding
+through the heavy query — 10 more seconds of CPU and disk spent on an
+answer that will be thrown away the moment it's ready. Multiply by a
+traffic spike: hundreds of doomed queries piling up on your database,
+slowing down the queries that still matter, for users who already left.
+This is a real production failure mode.
+
+Work that outlives its usefulness doesn't just waste time. It holds
+memory, connections from the pool, file handles, goroutines. A server
+that can't cancel doomed work falls over during exactly the traffic
+spikes it most needs to survive.
+
+### Why your done channel can't solve this
+
+You could wire a done channel through YOUR own code. But follow the call
+chain of that search request:
+
+```
+your handler → your service layer → database/sql → the driver → the socket
+```
+
+Your hand-made done channel dies at the third arrow. `database/sql` is
+not your code — it has never heard of your channel and has no parameter
+to accept it. For a stop signal to travel the WHOLE chain, from "user
+closed the tab" all the way down to "kill the query on the wire," every
+layer — including code written by strangers — has to agree on one
+standard way to receive it.
+
+That is the real answer to "why does every library take a ctx": the
+value of context is not the mechanism. You built the mechanism yourself
+in Module 4 ex3 — it's just a done channel. The value is the
+**agreement**. One interface, always the first parameter, that every
+library accepts — so cancellation composes across code written by people
+who never met. `net/http` cancels the request's context the moment the
+client disconnects; that context flows into your handler, through your
+service code, into `db.QueryContext`, and the driver kills the actual
+query on the wire. You wrote none of that plumbing. It works because
+everyone speaks the same word.
+
+The second reason is **time budgets**. Real systems need "you have this
+much time" to travel down the chain too. Your service promises answers
+in 2 seconds; it calls service B, which calls service C. If C is having
+a bad day, everyone above it must give up on schedule, not pile up
+waiting. A context carries a deadline down through every layer
+automatically — each layer can even ask "how much budget is left?" and
+skip work that can't finish in time.
+
+**The one-sentence version:** in real systems, the answer to "should
+this work keep going?" can change while the work is running — and the
+only way for that news to reach every layer, including other people's
+code, is one universal, agreed-upon signal. Everything else about
+context — the tree, `Done()`, `Err()`, deadlines — is engineering
+around that agreement.
+
 ## 1. What a context actually is
 
 Strip away the fear: a `Context` is a small object carrying three things.
