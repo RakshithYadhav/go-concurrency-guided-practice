@@ -441,6 +441,32 @@ goroutine. Call this function in a server handling 50 requests a second,
 and you leak up to 50 goroutines a second, each pinning its memory.
 Sound familiar? It's Module 1 ex4's leak wearing pipeline clothes.
 
+### A confusion worth heading off: `<-out` is ONE receive, not a standing listener
+
+Easy trap: looking at `return <-out` and picturing it as something that
+keeps running, the way the producer's loop keeps running. It doesn't.
+
+`<-out` means "take exactly one value out of this channel, whenever one
+shows up, then stop." It is not a subscription. It is not
+`for v := range out`, which WOULD keep receiving, over and over, until
+the channel closes. `<-out` is a single action that happens once.
+
+Picture a mailbox. You walk up, and you're willing to stand there and
+wait until exactly one letter shows up. The moment one arrives, you take
+it and walk away. You are now gone. Nobody is standing at that mailbox
+anymore. If a second letter gets dropped in five minutes later, it just
+sits there — you already left, and you were the only person who was
+ever going to check that particular mailbox.
+
+`return <-out` is that one trip to the mailbox. It runs once, it gets
+the FIRST match, and then `firstMatch` returns — done, finished, no more
+code left to run. There is no line anywhere in this function that will
+ever call `<-out` again. Not "not right now" — never again, for the rest
+of the program's life. So when the producer later tries to send its
+SECOND match, there is no receiver waiting for it, not temporarily, but
+permanently. That is the entire reason the send blocks forever instead
+of just waiting a while.
+
 ### The done-channel fix
 
 The sender needs a second exit. That's `select` (Module 2) plus one extra

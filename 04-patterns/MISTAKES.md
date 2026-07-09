@@ -54,3 +54,17 @@ called with the index `0`, not the value `7`. Fixed with
 `for _, j := range jobs`. Two exercises in a row with the identical bug
 shape (slice range needs `_, v`) — worth deliberately double-checking
 every `range` over a slice for this from now on, not just channels.
+
+## Exercise 3 — Leak fix, 2026-07-09
+
+No bugs — solved correctly on the first attempt. `done` channel created,
+`defer close(done)` placed immediately after (guaranteeing it runs on
+every return path), and the producer's send wrapped in a `select` against
+`<-done`. All four tests passed first try, including the 100-call
+goroutine-leak check. This followed an extended first-principles
+discussion in chat about exactly why each piece works — why `<-out` is a
+one-time receive not a standing listener, why `select` picks whichever
+case becomes ready, why a closed channel never blocks a receive, and why
+an unbuffered send blocks with no receiver — all of which fed directly
+into NOTES.md (both `04-patterns` and a new deep-dive section added to
+`02-channels/NOTES.md` Section 4).

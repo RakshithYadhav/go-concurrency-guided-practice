@@ -23,15 +23,41 @@ package exercises
 //
 // Do not change the signature.
 
+// ORIGINAL (before fix): plain send, no second exit —
+//
+//	func FirstMatch(items []string, match func(string) bool) (string, bool) {
+//		results := make(chan string)
+//		go func() {
+//			defer close(results)
+//			for _, it := range items {
+//				if match(it) {
+//					results <- it // second match: blocks forever, nobody receives
+//				}
+//			}
+//		}()
+//		v, ok := <-results
+//		return v, ok
+//	}
+//
+// Solved correctly on the first attempt: a done channel + select gave the
+// producer a second way out once the consumer (the single `<-results`)
+// had already returned.
+
 // FirstMatch returns the first item for which match returns true.
-// BUG: with 2+ matches, the producer goroutine leaks forever.
 func FirstMatch(items []string, match func(string) bool) (string, bool) {
 	results := make(chan string)
+	done := make(chan struct{})
+	defer close(done)
+
 	go func() {
 		defer close(results)
 		for _, it := range items {
 			if match(it) {
-				results <- it // second match: blocks forever, nobody receives
+				select {
+					case results <- it:
+					case <-done:
+						return
+				}
 			}
 		}
 	}()

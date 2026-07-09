@@ -229,6 +229,51 @@ your program hangs with no error message. Symptom from the outside:
 "function never returns." First question to ask: *who closes this channel,
 and is that line guaranteed to run?*
 
+### First principles: WHY blocking happens (and why it sometimes doesn't)
+
+You now know the rules. Here's the reasoning underneath all of them, in
+one place.
+
+**Why does a receive block on an open, empty channel?** Because `<-ch` is
+a request for a REAL value — one that was actually sent by someone, not
+a placeholder. If nothing has been sent yet, Go has two choices: hand
+back something fake right now, or wait until something real shows up.
+Go refuses to lie to you. It waits. The goroutine isn't spinning while it
+waits — it's parked, and the scheduler wakes it the instant a real value
+arrives.
+
+**Why does receiving from a CLOSED channel never block, then?** Because
+Go can be totally certain, the moment a channel closes, that no value
+will EVER arrive on it again — that's not a guess, it's enforced: sending
+on a closed channel is a hard panic, a crash, on purpose. So waiting on a
+closed channel would mean waiting for something Go already knows can
+never happen. Instead of forcing a pointless permanent hang, Go just
+hands back the zero value immediately, forever, with `ok=false`.
+
+**Why does this matter beyond avoiding a hang?** It's what makes `close`
+work as a **broadcast**. Many goroutines can be waiting on the same
+channel at once. The moment it closes, ALL of them — not just one —
+instantly find their receive ready, because "closed channels never
+block" applies to every receiver, all at once, forever after. One
+`close()` call, every waiter wakes up. That's the whole trick behind
+`close(done)` as a stop signal in `select` (Section 6).
+
+**Why does a SEND block on an unbuffered channel, even though the
+sender already has the value ready?** Because an unbuffered channel has
+**no storage** — no shelf to set the value on. The only way the value can
+move is a direct, hand-to-hand transfer: both sender and receiver present
+at the same instant. That's the "handshake" from Section 2. If no
+receiver is there, the sender is just standing there holding something
+with nowhere to put it down — so it waits, same underlying reason as the
+receive side: an honest operation can't complete until the real
+counterpart shows up.
+
+**Why does a buffered channel delay that blocking?** Because it DOES have
+storage — Section 3's mailbox. A send can succeed and return immediately
+by placing the value on an open shelf slot, no receiver required yet. It
+only blocks once every slot is full — the same "nowhere to put it" problem
+as the unbuffered case, just arriving later.
+
 ### The rules of close (memorize — these are interview bait)
 
 1. **Only the sender closes.** Never the receiver. The receiver can't know
