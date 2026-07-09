@@ -68,3 +68,41 @@ case becomes ready, why a closed channel never blocks a receive, and why
 an unbuffered send blocks with no receiver — all of which fed directly
 into NOTES.md (both `04-patterns` and a new deep-dive section added to
 `02-channels/NOTES.md` Section 4).
+
+## Exercise 4 — Bounded fetch, 2026-07-09
+
+**Attempt 1 — two bugs, both about the shape, not the semaphore:**
+```go
+func FetchAllBounded(urls []string, limit int, fetch func(string) string) []string {
+    sem := make(chan struct{}, limit)
+    results := make([]string, 0, len(urls))
+    for _, url := range urls {
+        go func() {
+            sem <- struct{}{}
+            defer func() { <-sem }()
+            res := fetch(url)
+            results = append(results, res)   // race + wrong order
+        }()
+    }
+    return results   // returns before any goroutine finishes
+}
+```
+The semaphore itself (buffered channel, acquire/release) was correct
+from the start. Two separate bugs around it:
+
+1. **No `WaitGroup`** — `return results` ran immediately after starting
+   the goroutines, before any of them had a chance to fetch anything.
+   `TestFetchAllBounded_OrderPreserved` got 4 results instead of 8 — pure
+   scheduling luck, not correctness. Same shape as Module 1's very first
+   lesson: nothing was making the caller wait.
+2. **`append` instead of indexed writes** — `append` adds in completion
+   order, not input order, and concurrent `append` calls from multiple
+   goroutines on the same slice are a data race besides. Fixed with
+   `results := make([]string, len(urls))` (length, not just capacity —
+   see Exercise 2's length-vs-capacity note) and `results[i] = res`,
+   reusing Module 1's slots pattern: each goroutine owns a distinct
+   index, so no lock is needed even though many goroutines write to the
+   same slice concurrently.
+
+Solved correctly on the second pass with both fixes together, clean
+under `-race`.
