@@ -59,3 +59,4 @@ go test ./01-goroutines/...                # quick native test run (NO race dete
 | 2026-07-06 | Module 2 (channels) opened: notes, 4 demos, 5 exercises, 10 drills |
 | 2026-07-06 | Module 2: all 6 exercises solved (ex6 Fibonacci added mid-module for extra reps), clean under `-race`; DRILLS.md + module quiz still pending. Module 1 ex4 also closed out. |
 | 2026-07-07 | Module 1 quiz round 1 (Q1-Q3): Q1-Q2 passed, Q3 partial — tracker + open follow-ups in `01-goroutines/QUIZ.md`. Module 3 (sync & memory model) opened: notes, 4 demos, 4 exercises. |
+| 2026-07-09 | Module 3: all 4 exercises solved, clean under `-race`. Quiz: Q1-Q5 passed, Q6-Q8 open (tracked in `03-sync/QUIZ.md`). NOTES.md grew from quiz questions: RWMutex bookkeeping cost, memory-model rewrite with notepad-handoff analogy, channels-vs-mutex "problem shape" section. Module 4 (Patterns I: pipelines & pools) opened: notes, 4 demos, 4 exercises. |
