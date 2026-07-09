@@ -1,5 +1,7 @@
 package exercises
 
+import "sync"
+
 // Exercise 4 — IMPLEMENT: build sync.Once yourself.
 //
 // Same contract as the real thing, both guarantees (notes Section 4):
@@ -27,10 +29,17 @@ package exercises
 // MyOnce is a from-scratch sync.Once. Zero value must be ready to use.
 type MyOnce struct {
 	// your fields here
+	mu sync.Mutex
+	done bool
 }
 
 // Do runs f exactly once across all calls to this MyOnce, and does not
 // return until that one run has completed.
 func (o *MyOnce) Do(f func()) {
-	panic("implement me")
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.done {
+		o.done = true
+		f()
+	}
 }

@@ -143,6 +143,20 @@ When to use it:
 - **It's not free.** RWMutex does more bookkeeping than Mutex. If writes
   are common, or there's little contention, RWMutex is often *slower*.
   Start with a plain Mutex. Upgrade only if you measured a real win.
+
+  Why the extra cost? A plain Mutex only tracks one fact: is someone in,
+  or not? That's close to a single flag — `Lock()` flips it one way,
+  `Unlock()` flips it back. RWMutex has a harder question to answer: not
+  just "is someone in," but "how many readers are in right now, and is a
+  writer waiting for them to leave?" Picture a librarian at the door of a
+  reading room. Every reader who walks in makes her add one to a running
+  head count. Every reader who leaves makes her subtract one. She does
+  this even if there's only ever one reader all day — the tally-keeping
+  itself is work, whether or not anyone else ever shows up. Add a writer
+  who needs the room empty, and now every `RLock()`/`RUnlock()` call also
+  has to check "is a writer waiting?" That's real work happening on every
+  single call — work a plain Mutex never has to do. You only earn that
+  cost back when there really are lots of readers overlapping at once.
 - **You can't upgrade a read lock into a write lock.** If you hold `RLock`
   and try to take `Lock`, you deadlock: the writer side waits for all
   readers to leave, and you *are* a reader who's now waiting for the
@@ -219,12 +233,32 @@ if !done {          // BROKEN
 }
 ```
 
-Two reasons. First, it's a data race on `done` — two goroutines can both
-read `false` before either writes `true`, so it runs twice. Second, even
-if the race magically didn't happen, a goroutine that sees `done == true`
-sails right past while the first goroutine is still *inside*
-`loadConfig()` — and reads a half-built config. You'll build a correct
-version yourself in exercise 4. It's harder than it looks.
+This has two separate bugs. Keep them straight — they're different problems,
+and a fix for one does not fix the other.
+
+**Bug 1 — this is a plain data race.** Two goroutines can both read
+`done == false` before either one writes `true`. So both goroutines think
+"I'm first," and both call `loadConfig()`. The whole point of "only once"
+is gone.
+
+**Bug 2 — even if you magically stopped the race, this is still broken.**
+Say goroutine A starts `loadConfig()` but hasn't finished. Goroutine B
+checks `done`. If A hasn't set `done = true` yet, B also starts loading —
+same problem as bug 1. But even worse: if A sets `done = true` too early
+(say, right when it starts, not when it finishes), goroutine B could see
+`done == true`, skip straight past the `if`, and read `config` while A is
+still building it. B gets a half-finished, broken config.
+
+`sync.Once` exists because it fixes both bugs with one tool. It doesn't
+just track "has this run" — it makes every caller, including the 99
+"losers," actually **wait** until the one real run is completely finished
+before any of them can read the result. That is the guarantee your naive
+`if !done` version is missing, and it is the exact thing the test suite in
+exercise 4 checks for: not just "did f run once," but "did every caller
+wait for the real result, not a half-built one."
+
+You'll build a correct version yourself in exercise 4. It's harder than
+it looks.
 
 Related, worth knowing they exist: `sync.OnceFunc` and `sync.OnceValue`
 (Go 1.21+) wrap a function so it can only run once.
@@ -253,10 +287,31 @@ first. We won't drill it.
 
 This is the theory under every race you've fixed. It's also the interview
 question that separates "has used goroutines" from "understands them."
+Let's build it slowly, with a picture in your head, before the formal
+version.
 
-Here's the uncomfortable part. Without synchronization, Go does not
-promise that a write made by goroutine A will *ever* be seen by goroutine
-B. This loop can spin **forever**:
+### The real problem: private scratchpads, not one shared memory
+
+Your computer has more than one CPU core. Each core can run a different
+goroutine at the same time. Here's the part that trips people up: **each
+core keeps its own private scratchpad of recent values.** This is called
+a cache. It exists to make things fast.
+
+So when goroutine A, running on core 1, writes `done = true`, that write
+might just sit in core 1's private scratchpad for a while. It does not
+automatically get broadcast to every other core right away. Core 2 —
+where goroutine B is running — might keep looking at its own old copy of
+`done`, still `false`, for a long time. Maybe forever.
+
+On top of that, the compiler adds a second problem. If it looks at your
+code and decides "this loop never changes `done` itself," it may keep
+`done`'s value sitting in a fast register instead of re-reading it from
+memory every time through the loop. So even if core 2's memory did
+eventually get the update, your code might not even bother checking
+again.
+
+Two separate reasons, stacking on top of each other, for why an
+unprotected read of a shared variable can simply never see a change:
 
 ```go
 var done bool
@@ -264,29 +319,51 @@ go func() { done = true }()
 for !done { }   // may never end
 ```
 
-How is that possible? Two layers, working against you:
-
-- **The compiler** is allowed to optimize. It may keep `done` in a CPU
-  register and never re-read it from memory. From the loop's point of
-  view, `done` never changes.
+- **The compiler** may keep `done` in a CPU register and never re-read it
+  from memory. From the loop's point of view, `done` never changes.
 - **The CPU** has a separate cache per core. Core 1's write can sit in
   its own buffer, invisible to core 2, for an unbounded amount of time.
 
-Both behaviors are legal — *because the code has a data race*. The Go
-memory model's deal is one sentence:
+Both behaviors are legal — *because the code has a data race*.
 
-> **No data races? Then your program behaves as if everything ran in one
-> simple, interleaved order. Data races? All bets are off.**
+### The one-sentence rule
+
+Here's Go's actual deal with you, and it's blunt:
+
+> **If your goroutines never touch the same piece of memory at the same
+> time without protection, your program behaves exactly like you'd
+> expect — one clean, sensible order. But the moment two goroutines DO
+> touch shared memory unprotected, all guarantees disappear. Not
+> "probably fine." Gone. Anything can happen.**
 
 So the excuse "it's just a flag, a stale read can't hurt" is never valid.
 Racy code isn't "slightly wrong." It's outside the rules entirely.
 
-### happens-before: the guarantee that sync tools give you
+### happens-before: what it really means
 
-Locks and channels don't just make goroutines wait. They also **publish
-memory**. Each one creates what the spec calls a *happens-before* edge:
-everything goroutine A did **before** the sync point is guaranteed visible
-to goroutine B **after** it.
+Forget the fancy name for a second. Think of it like handing someone a
+notebook.
+
+Imagine you're writing notes on your own private notepad. I can't see
+it — not because I'm far away, but because it's YOUR notepad, not a
+shared whiteboard. Now imagine you finish writing, and you physically
+hand me the notepad. At the exact moment you hand it to me, I am
+guaranteed to see everything you wrote in it — not just the last word,
+all of it.
+
+That handoff is the important part. It's not just "time passed." It's a
+specific action — a handoff — that comes with a guarantee attached:
+"everything I did before this handoff, you can now see."
+
+In Go, certain actions work exactly like that handoff. Sending a value on
+a channel. Unlocking a mutex. Calling `wg.Done()`, which then causes
+`wg.Wait()` to return. Each one of these isn't just "goroutines waiting on
+each other" — each one is a guaranteed handoff of everything that
+happened before it. That guaranteed handoff is what **happens-before**
+means: if A's action happens-before B's action, B is guaranteed to see
+everything A did leading up to that point. Without one of these specific
+handoff actions, there is no such guarantee — even if A really did finish
+first in real, physical time.
 
 The edges you already own:
 
@@ -298,12 +375,24 @@ The edges you already own:
 | `wg.Done()` | `wg.Wait()` returns | ✓ — see below |
 | `once.Do(f)` returns | (anyone) | ✓ — everything f wrote is visible |
 
-Look at the fourth row. That's the formal reason your Module 1 pattern —
-fill private slots, then merge after `Wait()` — needed **no locks at
-all**. Each worker's writes happen-before its `Done()`. All the `Done()`
-calls happen-before `Wait()` returning. And `Wait()` returning
-happens-before your merge loop reading. You built happens-before chains
-for two whole modules without knowing the word. Now you know the word.
+### Why Module 1's pattern needed no locks
+
+Now put it together. In Module 1, each worker goroutine wrote into its
+own private slot — nobody else was touching it, no sharing while the
+work happened. Then each worker called `wg.Done()`.
+
+`wg.Done()` is one of those handoff actions. So is `wg.Wait()` returning.
+Here's the chain: each worker's private writes happen-before that
+worker's own `Done()` call. And Go's `WaitGroup` guarantees that every
+`Done()` call happens-before the matching `Wait()` returning. Chain those
+together: every worker's writes happen-before `Wait()` returns in your
+main goroutine.
+
+So by the time `Wait()` returns, you are guaranteed — not "probably,"
+guaranteed — to see every worker's finished writes, safely, with no stale
+cache and no reordering weirdness. That's the entire reason no mutex was
+needed. The `WaitGroup` itself was already doing the handoff job a lock
+would have done.
 
 ## 7. Which tool when? The decision framework
 
@@ -327,6 +416,53 @@ And the honest engineering order: **do the simplest correct thing, then
 measure.** map+Mutex before sync.Map. Mutex before RWMutex. Any of those
 before something clever. Exercise 1's benchmarks give you real numbers to
 back this up.
+
+### But WHY would data "move" vs "stay put"? Choosing by problem shape
+
+The rule above is easy to recite and hard to use until you can look at a
+problem and see its shape. So ask one question about your data: **does
+this data have one owner at a time, who finishes with it and hands it
+off — or does it have many owners at once, forever, for the life of the
+program?**
+
+**The moving shape — an assembly line.** Think of Module 2's exercises.
+A generator goroutine creates a number and sends it down a channel. The
+moment it sends, the generator is done with that number — it never
+touches it again. The receiver now owns it completely. Like a car on an
+assembly line: a worker bolts on a wheel, slides the car to the next
+station, and never reaches back to touch it again. Ownership passes
+forward, one direction, cleanly. At every moment, exactly one goroutine
+is responsible for the data.
+
+That's the right shape for: pipelines, work queues (dispatcher hands a
+job to a worker), streaming results, "first answer wins", completion
+signals — anything where you can draw an arrow from one goroutine to the
+next.
+
+**The staying shape — a filing cabinet in the middle of the office.**
+Think of this module's `Inventory` or `PriceCache`. The stock levels
+don't flow anywhere. There is no sequence of steps that hands the map
+from one goroutine to the next and then it's done. Instead: a filing
+cabinet in the middle of an office. Any clerk might walk over and check
+it, or update it, at any random moment, all day. Nobody owns the
+cabinet — everybody shares it, for as long as the office is open.
+
+That's the right shape for: caches, counters, registries, config,
+inventories — one long-lived piece of state, touched at unpredictable
+times by many unrelated goroutines.
+
+**The test to run in your head:** *"Can I draw this as a straight
+line — goroutine A finishes with the data, then B picks it up?"* If yes,
+channel. *"Or is this a thing that just exists for a long time, that
+lots of unrelated goroutines poke at whenever they need to?"* If yes,
+mutex.
+
+Two checks from your own code. `Inventory.Reserve` could not be a
+channel: a server has many concurrent requests, all needing to check and
+update the SAME stock, at unpredictable times, forever — no line to
+draw. And a Module 2 pipeline should not be a mutex: forcing every stage
+to share one struct would throw away the clean one-direction flow that
+made it simple in the first place.
 
 ## 8. Interview questions
 
