@@ -43,6 +43,19 @@ func NewInventory(stock map[string]int) *Inventory {
 	return &Inventory{stock: s}
 }
 
+// ORIGINAL (before fix): Lock at the top, Unlock at the BOTTOM — so the
+// error path returned while still holding the lock, deadlocking every
+// future caller on any item:
+//
+//	inv.mu.Lock()
+//	if inv.stock[item] < qty {
+//		return fmt.Errorf("insufficient stock for %s: have %d, want %d",
+//			item, inv.stock[item], qty) // BUG: returns still holding the lock
+//	}
+//	inv.stock[item] -= qty
+//	inv.mu.Unlock()
+//	return nil
+
 // Reserve atomically checks and decrements stock for an item.
 func (inv *Inventory) Reserve(item string, qty int) error {
 	inv.mu.Lock()

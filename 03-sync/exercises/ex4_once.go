@@ -26,6 +26,13 @@ import "sync"
 // Hint-shaped question: what must a latecomer block ON, and what marks
 // "f has completed" as opposed to "f has started"?
 
+// ORIGINAL (before fix): the scaffold had no fields and Do() was just
+// panic("implement me"). Solved correctly on the first attempt — holding
+// the mutex across the entire done-check AND f() call is what delivers
+// both guarantees (exactly-once + everyone waits for completion). The
+// real sync.Once adds an atomic fast path on top purely for speed; this
+// version is correct, just unoptimized.
+
 // MyOnce is a from-scratch sync.Once. Zero value must be ready to use.
 type MyOnce struct {
 	// your fields here

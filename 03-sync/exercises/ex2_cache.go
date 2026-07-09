@@ -42,6 +42,22 @@ func NewPriceCache() *PriceCache {
 	return &PriceCache{prices: make(map[string]float64)}
 }
 
+// ORIGINAL (before fix): no mutex anywhere — a bare check-then-act on a
+// shared map. Both the map access and the logic raced:
+//
+//	func (c *PriceCache) GetOrFetch(symbol string, fetch func(symbol string) float64) float64 {
+//		if price, ok := c.prices[symbol]; ok {
+//			return price
+//		}
+//		price := fetch(symbol)
+//		c.prices[symbol] = price
+//		return price
+//	}
+//
+// Two broken fix attempts before the final version (see MISTAKES.md):
+// Unlock() placed after a return (dead code), then defer registered below
+// the early-return path so cache hits still leaked the lock.
+
 // GetOrFetch returns the cached price for symbol, calling fetch on a miss.
 func (c *PriceCache) GetOrFetch(symbol string, fetch func(symbol string) float64) float64 {
 	c.mu.Lock()

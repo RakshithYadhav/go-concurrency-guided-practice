@@ -79,7 +79,25 @@ rewritten twice in chat (analogy version, then a concrete 2-worker/
 results[]-slice numeric walkthrough) — revisit with the numeric walkthrough
 next session, it wasn't fully absorbed yet. Deferred at his request.
 
-**Q8 (channels-vs-mutexes rule + real example)** — in progress.
+**Q8 (channels-vs-mutexes rule + real example)** — 🔶 **Nearly closed.**
+Got the rule right after one refinement, in his own words: "For a channel
+it keeps moving. But for a mutex it stays put, and goroutines come and
+touch it." Asked a strong depth question — "WHY would we want to move data
+vs let goroutines touch shared data, WHEN does each make sense" — which
+led to a new NOTES.md Section 7 subsection (assembly line vs filing
+cabinet, choosing by problem shape). Still owed to close: name ONE real
+channel from his Module 2 code and ONE real mutex from Module 3 code and
+say why each fits its shape.
+
+## To close out this quiz (next session)
+
+1. **Q6:** name the two layers that can keep `for !done {}` spinning
+   forever (compiler register caching + per-core CPU cache). Explanation
+   given but never said back.
+2. **Q7:** full memory-model rule (BOTH halves), and trace the 2-worker
+   `results[]` example: why does Done/Wait guarantee main sees 10 and 20?
+   Use the numeric walkthrough in NOTES.md Section 6.
+3. **Q8:** the two concrete examples from his own code.
 
 ---
 

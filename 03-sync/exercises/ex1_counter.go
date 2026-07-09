@@ -36,6 +36,17 @@ type Counter interface {
 	Value() int64
 }
 
+// ORIGINAL (before fix): the scaffold had no counter types at all — both
+// constructors were just
+//
+//	func NewMutexCounter() Counter  { panic("implement me") }
+//	func NewAtomicCounter() Counter { panic("implement me") }
+//
+// Real bugs made on the way to this solution (full detail in MISTAKES.md):
+// `var` keywords inside struct fields, receiver written `(*CounterStruct cs)`,
+// missing `sync/atomic` import, an unguarded read in the mutex Value(), and
+// an atomic Value() that returned cs.Value() — calling itself forever.
+
 type CounterWithMutex struct {
 	mu sync.RWMutex
 	count int64
