@@ -1,5 +1,7 @@
 package exercises
 
+import "sync"
+
 // Exercise 2 — IMPLEMENT: a worker pool (the shippio shape, from scratch).
 //
 // ProcessAll runs fn over every job using EXACTLY `workers` goroutines —
@@ -22,8 +24,46 @@ package exercises
 //
 // Assume workers >= 1. Do not change the signature.
 
+// ORIGINAL (before fix): two bugs. `output := make([]int, len(jobs))`
+// created a slice already full of `len(jobs)` zeros, and `append` added
+// results AFTER those zeros — 10 jobs produced 20 results. Separately,
+// `for j := range jobs { jbs <- j }` ranged over the []int like a
+// channel, sending indices instead of values (same shape as ex1's bug).
+// Fixed with `make([]int, 0, len(jobs))` and `for _, j := range jobs`.
+
 // ProcessAll applies fn to every job using a pool of `workers` goroutines
 // and returns all results in any order.
 func ProcessAll(jobs []int, workers int, fn func(int) int) []int {
-	panic("implement me")
+	jbs := make(chan int)
+	results := make(chan int)
+	output := make([]int,0, len(jobs))
+	var wg sync.WaitGroup
+
+	for w := 1; w <= workers; w+=1 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jbs {
+				results <- fn(j)
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	go func() {
+		for _, j := range jobs {
+			jbs <- j
+		}
+		close(jbs)
+	}()
+
+	for res := range results {
+		output = append(output, res)
+	}
+
+	return output
 }
