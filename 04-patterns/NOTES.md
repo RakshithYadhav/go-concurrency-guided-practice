@@ -178,6 +178,51 @@ Same 100 items with 8 copies of the slow stage: about 130ms instead of
 1000ms. That ratio — roughly N times faster until something else becomes
 the bottleneck — is the whole sales pitch.
 
+### My understanding (checked and confirmed)
+
+The channel acts like a load balancer, distributing the incoming values
+across the workers. Each of the N workers publishes its own results on
+its own output channel. We create N workers, let them work, then collect
+all N of their output channels and merge them into a single channel.
+
+One precision worth keeping: it's not a REAL load balancer — no health
+checks, no weighting, nothing that clever. It just hands each value to
+whichever receiver happens to be free at that moment (Module 2). The
+side effect is load balancing anyway: a busy worker can't be ready to
+receive, so work naturally flows to whoever's idle.
+
+### This is NOT a race — it's dividing work, not racing for it
+
+Easy to mix this up with Module 2's `FirstResult` ("first answer wins"),
+so let's be precise about the difference.
+
+In `FirstResult`, many goroutines all try to answer the SAME question,
+and you keep only whichever one finishes first — the rest are wasted
+work, deliberately thrown away.
+
+Fan-out does something completely different: every worker gets a
+DIFFERENT item. Nothing is thrown away. Nothing races against anything
+else for the same prize. `slowDouble` still takes 10ms per item, always —
+that never changes, no matter how many workers you add. What changes is
+**how many items get worked on at the same moment.**
+
+Trace it with real numbers. 24 items, 10ms each:
+
+- **1 worker:** does item 1 (10ms), THEN item 2 (10ms), THEN item 3
+  (10ms)... nothing overlaps. 24 × 10ms = 240ms total.
+- **8 workers, same input channel:** remember from Module 2 — when many
+  goroutines receive from one channel, each value goes to exactly ONE of
+  them. So worker 1 grabs item 1 and starts its 10ms. At the very same
+  moment, worker 2 grabs item 2 and starts ITS OWN 10ms. Same for workers
+  3 through 8. All eight 10ms jobs run **simultaneously**. After about
+  10ms, all eight finish, and each worker immediately grabs the next
+  unclaimed item. Three "rounds" of 8-at-a-time ≈ 30ms total, not 240ms.
+
+Every item still gets processed, exactly once, by exactly one worker.
+The per-item cost (10ms) never drops. What drops is the total wall-clock
+time, because work that used to be stacked up one-after-another is now
+happening in parallel.
+
 ### The price: order is lost
 
 With one worker, item 1's result comes out before item 2's. With eight
@@ -219,6 +264,48 @@ Somebody closes `jobs` when there's no more work — that's what ends every
 worker's `range` loop and lets the cooks go home. And because N workers
 all send on `results`, closing IT needs the multi-sender pattern you
 learned in Module 2: a WaitGroup plus one closer goroutine.
+
+### Why the closer goroutine can't just be `wg.Wait(); close(results)` in main
+
+Easy to think "why not skip the extra goroutine and just do this
+straight-line, right before the receive loop?"
+
+```go
+wg.Wait()          // WRONG: wait for all workers first...
+close(results)     // ...then close...
+for r := range results { ... }   // ...then finally start receiving
+```
+
+Trace what happens. A worker finishes a job and sends on `results`
+(unbuffered — the send blocks until someone is receiving RIGHT NOW). But
+nobody's receiving: `main` is stuck on `wg.Wait()`, which runs BEFORE the
+receive loop in this version. The worker can't finish its send, so it
+can never reach `wg.Done()`. Since `wg.Wait()` needs every worker to call
+`Done()`, and none of them can, `wg.Wait()` never returns either. Every
+goroutine is now frozen, each waiting on something only another frozen
+goroutine could unblock. Deadlock.
+
+The real code avoids this by running `wg.Wait()` in its own goroutine, so
+`main` doesn't wait for anything — it falls straight through to the
+receive loop immediately:
+
+```go
+go func() {
+    wg.Wait()
+    close(results)
+}()
+for r := range results { ... }   // main starts receiving right away
+```
+
+Now `main` is actively receiving from the very start, so worker sends
+never block on a missing receiver. Meanwhile the side goroutine quietly
+waits for all workers to finish, then closes `results` — which is what
+ends `main`'s `range` loop.
+
+**The rule:** `wg.Wait()` and the actual receiving have to run **at the
+same time**, not one after the other. Senders need an active receiver
+*while they're still working*, not only after they're already done.
+That's the whole reason the wait-and-close needs its own goroutine.
 
 ### Wait — isn't this just fan-out?
 
