@@ -24,10 +24,27 @@ import "context"
 //
 // Do not change the signature. Do not shrink the work.
 
-// ThumbnailAll renders every image, in order. BUG: ignores ctx entirely.
+// ORIGINAL (before fix): took ctx as a parameter but never touched it —
+//
+//	func ThumbnailAll(ctx context.Context, images []string, render func(string) string) ([]string, error) {
+//		out := make([]string, 0, len(images))
+//		for _, img := range images {
+//			out = append(out, render(img))
+//		}
+//		return out, nil
+//	}
+//
+// Fixed with the "pulse check" from NOTES Section 4 — no channel
+// operation exists in this loop for a select to hook into, so ctx.Err()
+// is checked directly at the top of each iteration instead.
+
+// ThumbnailAll renders every image, in order.
 func ThumbnailAll(ctx context.Context, images []string, render func(string) string) ([]string, error) {
 	out := make([]string, 0, len(images))
 	for _, img := range images {
+		if err := ctx.Err(); err!= nil {
+			return out, err
+		}
 		out = append(out, render(img))
 	}
 	return out, nil

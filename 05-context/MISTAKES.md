@@ -10,4 +10,11 @@ parent.)
 
 ---
 
-*(empty so far — entries get added as bugs actually happen)*
+## Exercise 2 — Ignored ctx, 2026-07-13
+
+No bugs — solved correctly on the first attempt. Recognized that this
+loop has no channel operations (nothing for `select` to hook into), so
+the fix was the "pulse check" from NOTES Section 4: `if err := ctx.Err();
+err != nil { return out, err }` at the top of each iteration, not a
+`select`. Good sign of picking the right one of the three listening
+techniques instead of defaulting to `select` everywhere.
