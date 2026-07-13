@@ -1,6 +1,10 @@
 package exercises
 
-import "context"
+import (
+	"context"
+
+	"golang.org/x/sync/errgroup"
+)
 
 // Exercise 3 — IMPLEMENT: parallel fetch, first error cancels the rest.
 //
@@ -25,8 +29,52 @@ import "context"
 //
 // Do not change the signature.
 
+// ORIGINAL (before fix): two bugs — output = append(output, res) raced
+// and scrambled order (same shape as Module 4's ProcessAll), and the
+// caller's ctx was discarded in favor of context.Background(), so a
+// canceled caller ctx would never reach these fetches:
+//
+//	func FetchAllOrFail(ctx context.Context, urls []string, fetch func(ctx context.Context, url string) (string, error)) ([]string, error) {
+//		group, ectx := errgroup.WithContext(context.Background())
+//		output := make([]string, 0, len(urls))
+//		for _, url := range urls {
+//			group.Go(func() error {
+//				res, e := fetch(ectx, url)
+//				if e != nil {
+//					return e
+//				}
+//				output = append(output, res)
+//				return nil
+//			})
+//		}
+//		if err := group.Wait(); err != nil {
+//			return output, err
+//		}
+//		return output, nil
+//	}
+//
+// Fixed with indexed writes (output[i] = res) and errgroup.WithContext(ctx)
+// — the received parameter passed straight through, not a fresh root.
+
 // FetchAllOrFail fetches all urls concurrently; on any failure it
 // returns the first error and cancels the remaining fetches.
 func FetchAllOrFail(ctx context.Context, urls []string, fetch func(ctx context.Context, url string) (string, error)) ([]string, error) {
-	panic("implement me")
+	group, ectx := errgroup.WithContext(ctx)
+	output := make([]string, len(urls))
+	for i, url := range urls {
+
+		group.Go(func() error {
+			res, e := fetch(ectx, url)
+			if e != nil {
+				return e
+			}
+			output[i] = res
+			return nil
+		})
+	}
+
+	if err := group.Wait(); err != nil {
+		return output, err
+	}
+	return output, nil
 }
