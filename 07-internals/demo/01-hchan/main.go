@@ -25,7 +25,7 @@ func main() {
 // isn't one here anyway) is never touched.
 func directHandoff() {
 	fmt.Println("=== 1. Direct handoff: receiver waits first (send path 1) ===")
-	ch := make(chan int) // unbuffered: no display case at all
+	ch := make(chan int) // unbuffered: a zero-slot mailbox — hand to hand only
 
 	go func() {
 		fmt.Println("   receiver: parking in recvq (nothing to take yet)...")

@@ -53,13 +53,24 @@ parked goroutines.** Every channel operation — send, receive, close —
 takes that lock first, does a tiny amount of work, and releases it.
 A channel is not magic. It is a small, well-guarded data structure.
 
-**The bakery counter.** Picture a tiny bakery. The display case is the
-buffer — it holds `dataqsiz` boxes. When the case is empty, customers
-(receivers) wait in a line at the counter: that line is `recvq`. When
-the case is full, delivery drivers (senders) wait in a line at the
-back: that line is `sendq`. At most one of the two lines is ever
-non-empty — think about why: if a customer is waiting, the case must
-be empty, so no driver would be waiting too.
+**The mailbox.** You know it from Module 2 — here is the full picture.
+`make(chan int, 3)` is a mailbox with 3 slots. Two kinds of people
+visit it: **droppers** (senders) carrying a letter, and **pickers**
+(receivers) who want one. Four rules:
+
+1. A picker finds a letter in the box → takes the oldest, leaves.
+2. A picker finds the box EMPTY → stands and waits. That waiting line
+   IS `recvq`.
+3. A dropper finds a free slot → drops the letter in, leaves.
+4. A dropper finds the box FULL → stands and waits, letter in hand.
+   That line IS `sendq`.
+
+Why can at most ONE of the two lines have people in it? Ask what it
+takes to be standing in each. Waiting pickers exist only when the box
+is empty (rule 1 — if there were a letter, they'd have taken it and
+left). Waiting droppers exist only when the box is full (rule 3 — if
+there were a free slot, they'd have used it and left). A box can't be
+empty and full at the same time, so the lines can't both be occupied.
 
 ### What a send actually does
 
@@ -68,12 +79,13 @@ be empty, so no driver would be waiting too.
 1. **Someone is already waiting to receive?** Pop the first goroutine
    off `recvq` and copy `v` STRAIGHT into that goroutine's stack
    variable. The buffer is never touched. Then mark that goroutine
-   runnable. This is called **direct handoff** — the driver hands the
-   box straight to the waiting customer; it never enters the case.
-2. **No waiter, but the case has room** (`qcount < dataqsiz`)? Copy
+   runnable. This is called **direct handoff** — the dropper puts the
+   letter straight into the waiting picker's hands; it never touches
+   the box.
+2. **No waiter, but the box has a free slot** (`qcount < dataqsiz`)? Copy
    `v` into the buffer at `sendx`, advance `sendx`, bump `qcount`.
    Done — the sender never blocks.
-3. **No waiter and the case is full?** The sender goroutine parks
+3. **No waiter and the box is full?** The sender goroutine parks
    itself on `sendq` and tells the scheduler "I can't run until
    someone frees me." This is what "the send blocks" MEANS: the
    goroutine is added to a wait list inside the channel and taken off
@@ -96,7 +108,7 @@ and an empty buffer, and returns immediately with the zero value and
 `ok == false`. There is nothing to wait FOR — the flag answers the
 question the receiver was going to wait on. (If the buffer still has
 items, receives drain those first; the flag only matters once the
-case is empty.)
+box is empty.)
 
 **Why does sending on a closed channel panic?**
 The send takes the lock, sees `closed == 1`, and panics on purpose.
@@ -108,15 +120,16 @@ Module 2 exists: only the sender may close, because only the sender
 knows no more sends are coming.
 
 **Why does an unbuffered send need a receiver present?**
-Unbuffered means `dataqsiz == 0` — the bakery has NO display case.
-Path 2 can never apply. So a send either finds a waiting customer
-(path 1, direct handoff) or parks (path 3). That is the whole
-"synchronization point" behavior from Module 2, explained by a zero-
-length buffer.
+Unbuffered means `dataqsiz == 0` — a mailbox with ZERO slots. Just a
+marked spot on the wall. Nothing can ever be LEFT there, so every
+letter must pass hand to hand. Path 2 can never apply: a send either
+finds a waiting picker (path 1, direct handoff) or parks (path 3).
+That is the whole "synchronization point" behavior from Module 2,
+explained by a zero-slot box.
 
 ### Numeric walkthrough
 
-`ch := make(chan int, 2)` — case with 2 slots. Watch the fields:
+`ch := make(chan int, 2)` — a box with 2 slots. Watch the fields:
 
 | Step | Operation | What happens | qcount | sendq | recvq |
 |------|-----------|--------------|--------|-------|-------|
