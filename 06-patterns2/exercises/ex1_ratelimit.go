@@ -2,8 +2,6 @@ package exercises
 
 import (
 	"context"
-
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
 
@@ -35,24 +33,15 @@ import (
 // second, returning results in input order.
 func FetchAllPaced(ctx context.Context, urls []string, perSecond int, fetch func(string) string) ([]string, error) {
 	limiter := rate.NewLimiter(rate.Limit(perSecond), 1)
-	output := make([]string, len(urls))
-	g, ectx := errgroup.WithContext(ctx)
+	output := make([]string, 0, len(urls))
 
-	for i, url := range urls {
-		g.Go(func() error {
-			err := limiter.Wait(ectx)
-			if err != nil {
-				return err
-			}
-
-			output[i] = fetch(url)
-			return nil
-		})
+	for _, url := range urls {
+		err := limiter.Wait(ctx)
+		if err != nil {
+			return output, err
+		}
+		output = append(output, fetch(url))
 	}
 
-	if err := g.Wait(); err!= nil {
-		return output, err
-	}
-	
 	return output, nil
 }

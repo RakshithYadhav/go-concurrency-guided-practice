@@ -2,6 +2,7 @@ package exercises
 
 import (
 	"context"
+	"math/rand"
 	"time"
 )
 
@@ -32,5 +33,23 @@ import (
 // Retry runs op up to attempts times with exponential backoff + jitter
 // between tries, honoring ctx during waits.
 func Retry(ctx context.Context, attempts int, base time.Duration, op func() error) error {
-	panic("implement me")
+	var err error
+
+	for i := 0; i < attempts; i++ {
+		if err = op(); err == nil {
+			return nil
+		}
+		if i == attempts-1 {
+			break
+		}
+
+		wait := base * (1 << i)
+		wait += time.Duration(rand.Int63n(int64(wait) / 2))
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
 }

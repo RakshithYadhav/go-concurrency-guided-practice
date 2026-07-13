@@ -52,7 +52,6 @@ func (k *KeyedMutex) Lock(key string) {
 func (k *KeyedMutex) Unlock(key string) {
 	k.mu.Lock()
 	m := k.locks[key]
-	delete(k.locks, key) // BUG: tidy, and fatal
 	k.mu.Unlock()
 	m.Unlock()
 }
