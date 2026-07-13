@@ -273,12 +273,32 @@ everyone agreed on the same interface.
 
 ## 5. errgroup — WaitGroup, evolved for the real world
 
-Recall Module 1's `FetchAll` shape: WaitGroup + slots. Now add two
-production requirements: **collect the first error**, and **when one
-fails, stop the others instead of letting them burn time on a doomed
-request**. Hand-wiring that takes a WaitGroup, an error channel or
-mutexed error variable, and a cancel — every time. `errgroup` (package
-`golang.org/x/sync/errgroup`) packages it:
+### The problem, restated with real stakes
+
+Recall Module 1's `FetchAll`: a WaitGroup plus slots, N goroutines all
+doing their own independent work, main waiting for every one of them to
+finish. That shape has a real gap once failure enters the picture.
+
+Picture this: you send five friends to five different stores to check if
+a sold-out item is back in stock. Ten minutes in, friend #3 calls: "I
+checked — the manufacturer discontinued this item completely. Nobody
+will ever have it." What should happen next?
+
+With plain `WaitGroup`, the honest answer is: nothing happens. The other
+four friends have no way of knowing. They keep driving, keep checking,
+keep burning gas and time, for a search that is now provably pointless.
+You only find out it was all wasted once the LAST friend finally calls
+back, whenever that happens to be.
+
+That's the gap. Two things are missing: a way to **collect the failure**
+the moment it happens, and a way to **tell everyone else to stop**,
+instead of letting them run a doomed errand to completion. Hand-wiring
+both yourself, every time, means a WaitGroup, plus an error variable
+guarded by a mutex (or a channel), plus your own cancel signal threaded
+through every goroutine. `errgroup` (package `golang.org/x/sync/errgroup`)
+packages all of that into a few method calls.
+
+### The code, walked through line by line
 
 ```go
 g, ctx := errgroup.WithContext(parentCtx)
@@ -294,20 +314,68 @@ if err := g.Wait(); err != nil {    // waits for all; returns FIRST error
 }
 ```
 
-What `errgroup.WithContext` promises:
+**`g, ctx := errgroup.WithContext(parentCtx)`** — this single line does
+two things at once, and both matter. It builds `g`, the group itself
+(the thing tracking all your goroutines, like a WaitGroup does). And it
+derives a BRAND NEW context — call it the group's own ctx — as a child
+of `parentCtx`. This is not the same object as `parentCtx`. It's a fresh
+child, specifically created so `errgroup` can cancel it later, on its
+own, without touching `parentCtx` at all. Hold onto that distinction —
+it's the crux of the whole mechanism, and it's exactly why the next line
+matters so much.
 
-1. `g.Go(f)` runs `f` in a goroutine (Add/Done handled for you).
-2. `g.Wait()` blocks until all return — and returns the **first**
-   non-nil error (later errors are dropped, deliberately: the first one
-   is almost always the root cause).
-3. **The moment any `f` returns an error, the group's `ctx` is
-   canceled** — every other `f` that respects ctx stops early. That's
-   the whole trick: first failure pulls the plug on the rest.
-4. Bonus: `g.SetLimit(n)` caps how many run at once — Module 4's
-   bounded parallelism, one method call.
+**`g.Go(func() error { return fetch(ctx, url) })`** — starts a goroutine,
+the same way `wg.Add(1); go func() { defer wg.Done(); ... }()` did in
+Module 1, except `errgroup` handles the `Add`/`Done` bookkeeping for you.
+Notice which `ctx` gets passed into `fetch`: the GROUP's ctx from the
+line above — NOT `parentCtx`. This is not a style choice. If you passed
+`parentCtx` here instead, none of these fetches would ever learn about
+each other's failures, because `parentCtx` is never the thing `errgroup`
+cancels. Only the group's own derived ctx gets canceled on failure — so
+that is the only ctx your workers can listen to if you want them to hear
+about it.
 
-The mental model: **WaitGroup for goroutines that can't fail; errgroup
-for goroutines that can.** In production, they can.
+**`g.Wait()`** — blocks until every single goroutine started with `g.Go`
+has returned, exactly like `wg.Wait()`. The difference: it also gives you
+back a return value — the FIRST non-nil error to come out of any of them
+(later errors, if there are several, are simply dropped, on purpose,
+because the first failure is almost always the real root cause; the rest
+are usually just the fallout).
+
+### The actual cancellation trick — the part that solves the friends-and-stores problem
+
+Here's the mechanism, stated directly: **the moment ANY of your `g.Go`
+functions returns a non-nil error, `errgroup` immediately cancels the
+group's own ctx** — the one you got back from `WithContext`, the one you
+were told to pass into every worker. That cancellation is `errgroup`
+doing exactly what you'd want a good group leader to do: the instant one
+search comes back "this is pointless," it radios everyone else to turn
+around.
+
+But — and this connects straight back to the closing-bell idea from
+Section 6 — `errgroup` **cannot force any goroutine to stop.** It can
+only cancel that shared ctx. Whether a given `fetch` call actually
+notices and turns around depends entirely on whether IT is written to
+listen — a `select` against `ctx.Done()`, same as always. An `errgroup`
+worker that ignores its ctx will just keep running to completion,
+wasting time, exactly like the friend who never checks their phone.
+Passing the right ctx gets you the ABILITY to stop early. The worker
+function still has to actually listen for that to happen.
+
+### One more piece: bounding how many run at once
+
+`g.SetLimit(n)` caps how many of your `g.Go` goroutines run at the same
+moment — Module 4's bounded parallelism (the semaphore pattern), now
+built into the group with one method call instead of a hand-rolled
+buffered channel.
+
+### The mental model to keep
+
+**WaitGroup is for goroutines that can't fail.** `errgroup` is for
+goroutines that can — which, in production, is almost always true. Any
+time you're about to reach for a `WaitGroup` and also find yourself
+wanting "collect the error" or "stop the others if one fails," that's
+the signal to reach for `errgroup` instead.
 
 ▶ **Run:** `go run ./05-context/demo/03-errgroup` — five fetches, one
 fails at 50ms, watch the other four get canceled instead of running
