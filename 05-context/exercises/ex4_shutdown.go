@@ -38,9 +38,23 @@ import (
 //
 // Do not change the signature.
 
+// ORIGINAL (before fix): scaffold body was just panic("implement me").
+// Solved correctly on the first attempt, including the deliberate trap —
+// the drain context is derived from context.Background(), not from the
+// already-canceled ctx parameter. A child of an already-dead ctx would
+// be born dead, aborting the drain instantly instead of honoring
+// drainTimeout.
+
 // ServeUntilCanceled serves on l until ctx is canceled, then gracefully
 // drains in-flight requests for up to drainTimeout. Returns nil on a
 // clean drain, or the shutdown error if the deadline was exceeded.
 func ServeUntilCanceled(ctx context.Context, srv *http.Server, l net.Listener, drainTimeout time.Duration) error {
-	panic("implement me")
+	go func() { srv.Serve(l) }()
+
+	<-ctx.Done()
+
+	shCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer cancel()
+	err := srv.Shutdown(shCtx)
+	return err
 }

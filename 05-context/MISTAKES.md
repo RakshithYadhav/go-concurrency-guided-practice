@@ -18,3 +18,14 @@ the fix was the "pulse check" from NOTES Section 4: `if err := ctx.Err();
 err != nil { return out, err }` at the top of each iteration, not a
 `select`. Good sign of picking the right one of the three listening
 techniques instead of defaulting to `select` everywhere.
+
+## Exercise 4 — ServeUntilCanceled, 2026-07-13
+
+No bugs — solved correctly on the first attempt, including the
+deliberate trap: derived the drain context from `context.Background()`,
+not from the already-canceled `ctx` parameter. Getting this wrong is the
+"fresh clock" mistake from NOTES Section 6 — a child of an already-dead
+context is born dead, and the drain would abort instantly instead of
+giving in-flight requests their real `drainTimeout` budget. All four
+tests passed, including the one built specifically to catch this trap
+(`TestServe_DrainsInFlightRequest`), clean under `-race`.

@@ -376,6 +376,40 @@ would be born dead, and the drain would abort instantly instead of
 giving requests their 10 seconds. The shutdown clock must be a fresh
 timer, independent of the thing that triggered it.
 
+### Three questions worth being able to answer about this exact snippet
+
+**Why doesn't cancellation forcibly stop anything?** Picture context as a
+closing bell, not a security guard who checks on people. `cancel()` (or
+a timeout firing) does exactly ONE thing: it closes `ctx.Done()`, once.
+Nobody walks around checking on goroutines or dragging them out — Go has
+no way to force a goroutine to stop from the outside. It's on EACH
+goroutine to actively check whether the bell has rung (`select` on
+`<-ctx.Done()`, or a periodic `ctx.Err()` check) and choose to leave.
+A goroutine that never checks — like `ThumbnailAll` before its fix —
+just keeps working, completely oblivious, long after the bell rang.
+Cancellation is a signal to notice, not a switch that flips anything off
+by itself.
+
+**Does `<-ctx.Done()` blocking main freeze the server too?** No — and
+this is worth tracing carefully, because it looks alarming at first.
+`go func() { srv.ListenAndServe() }()` and `<-ctx.Done()` are two
+independent goroutines. Blocking one goroutine never freezes another —
+that's the same "main doesn't wait" idea from Module 1, just flipped:
+here main deliberately waits while a SEPARATE goroutine (the server)
+keeps working the whole time, completely unaffected. Main has nothing
+useful left to do at this point except wait for the shutdown signal, so
+it blocks on purpose, cheaply, doing nothing until the signal arrives.
+
+**Why does `ListenAndServe` need the `go func()` wrapper at all?**
+Because `ListenAndServe` never returns on its own — it serves requests
+forever until something stops it. Without `go func()`, main would get
+stuck INSIDE that call permanently, and would never even reach the
+`<-ctx.Done()` line below it — the code that watches for the shutdown
+signal would be unreachable. The wrapper isn't there to "avoid blocking"
+in general; it moves ONE particular permanent block (serving) out of
+main's way, freeing main to do the block that actually matters: waiting
+for the signal to stop.
+
 ### The same shape for a worker pool
 
 Steps 2–4 by hand, with tools you already own:
