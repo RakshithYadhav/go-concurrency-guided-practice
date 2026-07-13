@@ -1,6 +1,11 @@
 package exercises
 
-import "context"
+import (
+	"context"
+
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
+)
 
 // Exercise 1 — IMPLEMENT: a rate-limited fetcher.
 //
@@ -29,5 +34,25 @@ import "context"
 // FetchAllPaced fetches all urls at no more than perSecond calls per
 // second, returning results in input order.
 func FetchAllPaced(ctx context.Context, urls []string, perSecond int, fetch func(string) string) ([]string, error) {
-	panic("implement me")
+	limiter := rate.NewLimiter(rate.Limit(perSecond), 1)
+	output := make([]string, len(urls))
+	g, ectx := errgroup.WithContext(ctx)
+
+	for i, url := range urls {
+		g.Go(func() error {
+			err := limiter.Wait(ectx)
+			if err != nil {
+				return err
+			}
+
+			output[i] = fetch(url)
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err!= nil {
+		return output, err
+	}
+	
+	return output, nil
 }
