@@ -1,6 +1,9 @@
 package exercises
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // Exercise 1 — IMPLEMENT: a worker pool that can be told to stop.
 //
@@ -28,8 +31,64 @@ import "context"
 //
 // Assume workers >= 1. Do not change the signature.
 
+// ORIGINAL (before fix): scaffold was empty goroutine bodies. Six real
+// bugs on the way to this solution (full detail in MISTAKES.md): workers
+// processed exactly one job instead of looping; `fn(<-jbs)` as a select-
+// case argument evaluated the receive OUTSIDE the select's protection;
+// the feeder never closed jbs, hanging even with no cancellation; a
+// pulse-check (`if ctx.Err() != nil` before a send) was the wrong tool
+// for a line that blocks on a channel operation; and close(jbs) sat
+// after the loop, unreachable from the select's early return. Final fix
+// for the feeder: `defer close(jbs)` at the top (runs on every exit
+// path) plus `select { case jbs <- job: case <-ctx.Done(): ... }` for
+// the send itself — same shape as the worker's send to results.
+
 // ProcessAllCtx applies fn to every job using `workers` goroutines,
 // stopping early (with partial results and ctx.Err()) if ctx is canceled.
 func ProcessAllCtx(ctx context.Context, jobs []int, workers int, fn func(int) int) ([]int, error) {
-	panic("implement me")
+	jbs := make(chan int)
+	results := make(chan int)
+	output := make([]int, 0, len(jobs))
+	var wg sync.WaitGroup
+
+	for w := 1; w <= workers; w += 1 {
+		wg.Add(1)
+		go func() error {
+			defer wg.Done()
+			for jb := range jbs { // ends when jobs is closed
+				select {
+				case results <- fn(jb):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+
+			return nil
+		}()
+	}
+
+	// wait and close
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// feed the jobs channel.
+	go func() error {
+		defer close(jbs)
+		for _, job := range jobs {
+			select {
+			case jbs <- job:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	}()
+
+	for result := range results {
+		output = append(output, result)
+	}
+
+	return output, ctx.Err()
 }
