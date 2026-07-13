@@ -53,3 +53,9 @@ func Retry(ctx context.Context, attempts int, base time.Duration, op func() erro
 	}
 	return err
 }
+
+// ORIGINAL (before fix):
+//
+// func Retry(ctx context.Context, attempts int, base time.Duration, op func() error) error {
+// 	panic("implement me")
+// }

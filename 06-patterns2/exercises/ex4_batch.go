@@ -27,5 +27,48 @@ import "time"
 // Batch groups items from in into slices of up to maxSize, flushing
 // early once the oldest buffered item has waited maxWait.
 func Batch(in <-chan int, maxSize int, maxWait time.Duration) <-chan []int {
-	panic("implement me")
+	out := make(chan []int)
+	go func() {
+		defer close(out)
+		var buf []int
+		timer := time.NewTimer(maxWait)
+		defer timer.Stop()
+
+		flush := func(reason string) {
+			if len(buf) == 0 {
+				return
+			}
+
+			out <- buf
+			buf = nil
+		}
+
+		for {
+			select {
+			case v, ok := <-in:
+				if !ok {
+					flush("close")
+					return
+				}
+				if len(buf) == 0 {
+					timer.Reset(maxWait)
+				}
+				buf = append(buf, v)
+				if len(buf) >= maxSize {
+					flush("size")
+				}
+			case <-timer.C:
+				flush("age")
+				timer.Reset(maxWait)
+
+			}
+		}
+	}()
+	return out
 }
+
+// ORIGINAL (before fix):
+//
+// func Batch(in <-chan int, maxSize int, maxWait time.Duration) <-chan []int {
+// 	panic("implement me")
+// }

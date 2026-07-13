@@ -68,3 +68,8 @@ that inner scope, even if a same-named variable already exists outside.
 If a value needs to survive past the block (here: past the whole loop,
 for the final `return`), it must be assigned with `=` into the
 already-declared outer variable, not re-declared with `:=`.
+
+## Exercise 4 — Batch (size-or-age batcher)
+
+No bugs. All 5 tests passed first try: size trigger, age trigger,
+close-flushes-partial, empty input, no goroutine leak.

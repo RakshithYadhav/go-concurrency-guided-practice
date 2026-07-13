@@ -45,3 +45,9 @@ func FetchAllPaced(ctx context.Context, urls []string, perSecond int, fetch func
 
 	return output, nil
 }
+
+// ORIGINAL (before fix):
+//
+// func FetchAllPaced(ctx context.Context, urls []string, perSecond int, fetch func(string) string) ([]string, error) {
+// 	panic("implement me")
+// }
