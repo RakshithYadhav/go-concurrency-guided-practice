@@ -1,4 +1,4 @@
-# Module 7 — Interview Gauntlet + Internals
+# Module 7 — Runtime Internals + Interview Gauntlet (optional)
 
 Everything so far taught you to USE Go's concurrency. This module opens
 the hood. How is a channel actually built? What really happens when a
@@ -526,24 +526,31 @@ pipeline for you to open and explore.
 
 ---
 
-## 5. The gauntlet: rebuilding what you've only used
+## 5. The gauntlet: rebuilding what you've only used (low priority, optional)
 
-Everything you have USED as a library, an interviewer can ask you to
-BUILD:
+**Status (2026-07-14): deprioritized.** Rakshith's call, and it's a
+fair one — real interviews are broad; they can ask about anything, and
+solid understanding of the concepts matters more than having a rehearsed
+build of any one specific thing memorized. Timed, cold, no-hint reps on
+three specific data structures is a narrow bet for the time it costs.
+ex1–ex3 stay in the repo (`errgroup`, a token bucket, singleflight) as
+OPTIONAL exercises to return to whenever it's useful, but there is no
+timer requirement and no standing plan to grind them now. Future
+modules and tracks: at most a couple of this style, low priority, not
+a dedicated section.
 
-- You used `errgroup` in Module 5 → **ex1: build it.**
-- You used `rate.Limiter` in Module 6 → **ex2: build it.**
-- You used a keyed mutex in Module 6 → **ex3: build its cousin,
-  singleflight** (1000 identical requests, one execution, everyone
-  gets the answer).
+Everything you have USED as a library, an interviewer COULD ask you to
+build — that's still true and still worth knowing is possible:
 
-**The gauntlet rule (new for this module):** ex1–ex3 are attempted
-COLD, under a 25-minute timer, no hints while the timer runs. When the
-timer dies, we drop back to normal hint mode — no shame, the reps are
-the point. ex4 (the leak hunt) is untimed; it is a tooling exercise.
+- You used `errgroup` in Module 5 → ex1 builds it, whenever you want.
+- You used `rate.Limiter` in Module 6 → ex2 builds it, whenever you want.
+- You used a keyed mutex in Module 6 → ex3 builds its cousin,
+  singleflight (1000 identical requests, one execution, everyone
+  gets the answer) — whenever you want.
 
-**How to narrate while coding** — interviewers grade the talking as
-much as the code. Before writing anything, say three things out loud:
+If you do come back to one of these, the narration habit below is
+still worth practicing — interviewers grade the talking as much as the
+code. Before writing anything, say three things out loud:
 
 1. **The shape.** "Fan-out with a bounded pool" / "one mutex per key" /
    "a struct holding tokens refilled by arithmetic." Name the pattern.
