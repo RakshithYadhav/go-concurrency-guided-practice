@@ -179,23 +179,104 @@ rebalances continuously.
 
 ### The two kinds of "blocked" — this distinction wins interviews
 
-**Blocking on a channel (or mutex, or WaitGroup):** the G parks — the
-task card goes into a waiting folder (the channel's `sendq`/`recvq`
-from Section 1). The worker stays at the desk and immediately picks up
-the next card. **The OS thread never blocks.** This is why 100,000
-goroutines parked on channels cost you almost nothing but memory —
-they are just cards in folders, no threads attached.
+You have been saying "the goroutine blocks" since Module 2. That word
+has been hiding TWO completely different things happening underneath,
+and telling them apart is exactly the kind of question that separates
+"knows the API" from "knows the runtime."
 
-**Blocking in a syscall (file read, DNS lookup, cgo call):** the
-worker has to physically walk into the kernel carrying the task — the
-OS thread itself blocks. The runtime detaches the desk from that
-worker and seats another worker (parking a spare thread or spawning
-one) so the desk never sits idle. When the syscall returns, that
-goroutine goes back into a queue, and the extra worker parks.
+First, back up to the question underneath: **what does "blocked" even
+mean, physically?** Somewhere, some piece of code has been told to
+stop running and wait. The question that matters is: **who told it to
+stop — the Go runtime, or the operating system?** Those two have
+completely different amounts of control, and that difference is the
+whole story.
 
-One sentence for interviews: *"Channel blocking parks the goroutine
-and the thread moves on; syscall blocking takes the thread with it, so
-the runtime hands the P to another thread."*
+**Case 1 — blocking on a channel, mutex, or WaitGroup.**
+
+Recall the mailbox from Section 1. A picker goroutine finds the box
+empty and has to wait. Here is exactly what happens, one step at a
+time:
+
+1. The Go runtime (not the OS — this part is entirely Go's own
+   bookkeeping) puts that goroutine's task card into the mailbox's
+   `recvq` list. That's it — the card just moves from "running" to a
+   list sitting inside the channel struct.
+2. The runtime tells the desk (the P) this worker is sitting at:
+   "that goroutine is done for now — give me another one." This
+   function is literally called `gopark` inside the Go runtime source.
+3. The **OS thread (the M) never finds out anything happened.** As far
+   as the operating system is concerned, that thread is still
+   running Go code, at full speed, the entire time. It just switches
+   from running goroutine G1 to running goroutine G2, one function
+   call apart, in user space, with no trip to the kernel at all.
+
+Say that last part again, because it's the whole point: **the OS does
+not know a goroutine "blocked."** The Go runtime handled the entire
+thing itself, in userspace, using its own data structures (the wait
+queues from Section 1) and its own scheduler code. The thread just
+kept working — on a different piece of work.
+
+That is why 100,000 goroutines can sit parked on channels at once and
+it costs you almost nothing. Each one is a small stack (Section 2's
+top, ~8 KB measured) plus an entry in a linked list. No thread is
+tied up. No OS resource is spent. It is bookkeeping, not blocking, in
+the OS sense of the word.
+
+**Case 2 — blocking in a syscall (reading a file, a blocking DNS
+lookup, calling into C via cgo).**
+
+This is a genuinely different kind of stop. A syscall means the
+goroutine has asked the OPERATING SYSTEM to do something — "read the
+next 4KB from this file descriptor" — and the OS is the one saying
+"wait." The Go runtime has no say in that wait. It cannot un-block a
+thread that is sitting inside a kernel read() call; only the kernel
+can do that, when the disk hands back the data.
+
+So the OS thread (the M) is now genuinely, physically stuck — parked
+by the kernel, not by Go. And that is a problem for the desk (the P)
+that thread was sitting at: if the runtime did nothing, that desk
+would now sit empty until the disk finishes, even though 15 other
+goroutines are ready to run. One slow disk read would freeze an entire
+CPU's worth of scheduling capacity.
+
+The runtime's fix, step by step:
+
+1. Just before the thread enters the syscall, the runtime detaches
+   the P from that M. The desk and the (about-to-be-stuck) worker
+   split up.
+2. The runtime hands that now-empty desk to a DIFFERENT worker —
+   either a spare thread that was already parked from a previous
+   syscall (cheap, no OS involvement), or, if none is spare, the
+   runtime asks the OS to create a brand new thread (a real syscall
+   itself, `clone` on Linux — more expensive, but rare, since spares
+   get reused).
+3. That new worker sits down at the freed desk and keeps pulling task
+   cards from the tray. Scheduling continues without missing a beat.
+4. Meanwhile the ORIGINAL thread is still off in the kernel, blocked,
+   carrying exactly one goroutine's worth of work — the one that made
+   the syscall. It is not doing anything else and cannot be reused for
+   other goroutines while it's stuck there.
+5. When the syscall finally returns (the disk delivered the data),
+   that goroutine needs a desk again. If a P is free, it grabs one
+   immediately. If all P's are already staffed by other workers, the
+   goroutine's card goes into a run queue and it waits its turn like
+   anyone else. The thread that carried it either becomes the spare
+   for next time, or (if there are already enough spares sitting
+   around) the runtime lets it exit.
+
+Notice what this means for THREAD COUNT: unlike channel-blocking
+(zero new threads, ever), syscall-blocking can genuinely grow the
+number of OS threads your program uses — one extra, temporarily, per
+goroutine that's stuck in the kernel AT THE SAME TIME. That's the
+concrete cost difference.
+
+**Say it back in one line, because this is the sentence an interviewer
+wants to hear:** *"Channel blocking is the Go runtime parking a
+goroutine in userspace — the thread keeps running other work and no
+OS thread is affected. Syscall blocking is the OS itself blocking a
+thread — the Go runtime detaches that thread's P and gives the desk to
+someone else, so scheduling isn't stalled, but the blocked thread
+itself is genuinely stuck until the kernel returns."*
 
 **Network I/O is special** — it does NOT take the syscall path. Waiting
 sockets are registered with the OS's event system (epoll on Linux,
@@ -213,23 +294,74 @@ loops — before 1.14 that heartbeat would freeze.
 
 ### Numeric walkthrough
 
-GOMAXPROCS=2 (two desks, D1 and D2). You launch 6 goroutines from
-`main` (which runs on D1):
+GOMAXPROCS=2 — exactly two desks, D1 and D2. Two workers, M1 and M2,
+start out sitting at them. We will track the OS thread count as we go,
+because that number is the entire point of this walkthrough.
 
-1. G1..G6 land in D1's tray. D1's worker runs G1.
-2. D2's tray is empty → D2 steals half of D1's tray (3 cards: say
-   G4, G5, G6).
-3. G1 does `<-ch` on an empty channel → parks into that channel's
-   recvq. D1's worker instantly picks up G2. No thread blocked.
-4. G4 (on D2) reads a file → real syscall → D2's worker walks into
-   the kernel with it. The runtime seats a spare worker at D2, which
-   picks up G5. Still two desks working.
-5. Someone sends on the channel → G1 pops out of recvq into a tray →
-   runs again shortly.
+**Starting point:** 2 threads total (M1 at D1, M2 at D2). `main`
+launches six goroutines, G1 through G6.
 
-Total OS threads used: three (two at desks + one briefly stuck in the
-kernel). Total goroutines handled: six. That ratio — many G, few M —
-is the entire point of the design.
+**Step 1.** All six new task cards land in D1's tray (the desk that
+created them). M1, sitting at D1, starts running G1. D2's tray is
+still completely empty — M2 has nothing to do yet.
+_Threads so far: 2._
+
+**Step 2.** M2 notices its tray is empty, checks the shared bin (also
+empty), then steals. It walks over to D1 and takes HALF of D1's tray —
+three cards, say G4, G5, G6. D1 keeps G2 and G3 waiting. M2 starts
+running G4.
+_Threads so far: still 2 — stealing moves task cards between desks,
+it never creates a thread._
+
+**Step 3 — Case 1 happens.** G1 (still running on M1/D1) executes
+`<-ch` on a channel with nothing in it. Exactly the mechanism from
+the "Case 1" walkthrough above: G1's card goes into that channel's
+`recvq`, `gopark` is called, and M1 is told "next card, please." M1
+immediately pulls G2 out of D1's tray and starts running it. Notice
+what did NOT happen: no thread stopped, no thread was created, no
+trip to the kernel occurred. M1 just switched which goroutine it's
+executing, in userspace, in the time it takes to call a function.
+_Threads so far: still 2._
+
+**Step 4 — Case 2 happens.** G4 (running on M2/D2) calls a function
+that reads a file — a genuine syscall. Right before M2 enters the
+kernel, the runtime detaches D2 from M2 (step 1 of the Case 2
+sequence above). D2 is now an empty desk with a thread stuck in the
+kernel formerly sitting at it. The runtime looks for a spare thread to
+seat at D2; say one exists from an earlier syscall — call it M3. M3
+sits down at D2 and immediately picks up G5 from D2's tray. Meanwhile
+M2 is off in the kernel, motionless, waiting on the disk, carrying
+only G4.
+_Threads so far: 3 — M1, M2 (stuck in the kernel), and M3._
+
+**Step 5.** Some other goroutine sends a value on the channel G1 is
+waiting on. Exactly the mailbox mechanic from Section 1: the sender
+sees a waiter in `recvq`, hands the value straight to G1, and marks
+G1 runnable again. G1's card goes into a run queue (D1's tray, if
+there's room, or the global bin). It will resume running the next
+time a worker is free to pick it up — not necessarily instantly, but
+soon.
+_Threads so far: still 3 — this step was pure Case-1 mechanics,
+exactly like step 3, so it cost nothing in threads._
+
+**Step 6.** The disk finally returns G4's data. The kernel unblocks
+M2. G4 is now ready to keep running. If a desk is free, G4 grabs it
+immediately; if not, G4's card waits in a run queue like any other
+goroutine until one opens up. M2, no longer carrying anything, becomes
+a spare thread — parked, ready to be reused the next time some other
+goroutine makes a syscall. The runtime does NOT kill M2 immediately;
+keeping a small pool of spares around is cheaper than asking the OS
+to create a fresh thread every time.
+_Threads so far: still 3 (M2 didn't disappear, it just went idle)._
+
+**The tally at the end:** three OS threads did the work of six
+goroutines, with one of those threads only needed TEMPORARILY, for
+exactly as long as one file read took. That ratio — a handful of
+threads carrying however many thousand goroutines you want — is the
+entire reason the G-M-P design exists. Compare it to a language where
+every blocking call ties up a full OS thread: six blocking operations
+there would cost you six full threads, not three, and definitely not
+the two you'd have with zero blocking at all.
 
 ---
 
@@ -267,14 +399,48 @@ hand you the leak evidence automatically.
 ### The goroutine profile — your leak detector
 
 The one you will use most. It lists every live goroutine, GROUPED by
-identical stack, with a count per group. The leak-hunting recipe:
+identical stack, with a count per group.
+
+**What "count" actually means here.** The profiler doesn't just dump a
+flat list of goroutines. For EVERY live goroutine, it looks at that
+goroutine's full call stack — the exact chain of function calls that
+got it to wherever it's currently paused — and it GROUPS goroutines
+together whenever their stacks are identical. Each group is printed
+once, with a number in front: how many goroutines are sitting in that
+exact group, right now, at the moment you took the snapshot.
+
+Here's real output, captured from the `03-pprof` demo:
+
+```
+goroutine profile: total 117
+111 @ 0x7ff7... 0x7ff7... 0x7ff7... 0x7ff7... 0x7ff7...
+#	0x7ff7...	main.leakyWorker+0x1b	.../ex4_leakhunt.go:41
+
+1 @ 0x7ff7... 0x7ff7... ...
+#	0x7ff7...	runtime/pprof.writeRuntimeProfile+0xb0	...
+```
+
+Read the first line as: **111 separate goroutines are all currently
+parked at this exact same spot in the code — line 41 of
+`main.leakyWorker`.** That `111` is the count. It is a literal
+headcount of goroutines frozen at that one line. The second group's
+count is `1` — a single goroutine sitting somewhere completely
+different (that one's just the profiler capturing itself; ignore it).
+
+Now the leak-hunting recipe, using that number:
 
 1. Capture it: browser to
    `http://localhost:6060/debug/pprof/goroutine?debug=1`, or
    `go tool pprof -top http://localhost:6060/debug/pprof/goroutine`.
-2. Read the counts. A healthy server has a stable few dozen. A leak
-   shows one stack group with a huge and GROWING count — capture
-   twice, a minute apart; the leak is the number that climbed.
+2. Read the counts. A healthy server has goroutines constantly coming
+   and going — spawned, finished, gone — so every group stays small
+   and roughly flat over time. A leak looks different: capture once,
+   wait a minute, capture again. Say the `main.leakyWorker` group read
+   `111` the first time and `1,311` the second — that one group grew
+   by ~1,200 in 60 seconds while every other group stayed flat. THAT
+   growing group is the leak, and because pprof already grouped
+   identical stacks together, its count comes with the exact file and
+   line number attached — no hunting required.
 3. Read that group's stack, top frame first. The top frame says WHERE
    they are stuck — `runtime.gopark` → `chansend` means "parked
    sending on a channel", `chanrecv` means "parked receiving",
