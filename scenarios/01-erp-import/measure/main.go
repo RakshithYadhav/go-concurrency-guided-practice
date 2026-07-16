@@ -36,11 +36,11 @@ func main() {
 	const target = 2 * time.Second
 	switch {
 	case err != nil || erp.Rejected() > 0:
-		fmt.Println("verdict: BROKEN — the vendor rejected calls. Faster is worthless if it violates the contract.")
+		fmt.Printf("result: FAILED — %d calls rejected (over the %d-connection limit)\n",
+			erp.Rejected(), erpimport.MaxConcurrentERP)
 	case took > target:
-		fmt.Printf("verdict: MISSES the <%v target by %.1fx.\n", target, float64(took)/float64(target))
-		fmt.Println("(scaled model: at real feed size this is the 9:40am finish from the ticket)")
+		fmt.Printf("result: misses the %v target by %.1fx\n", target, float64(took)/float64(target))
 	default:
-		fmt.Printf("verdict: MEETS the <%v target. Record this in RESULT.md.\n", target)
+		fmt.Printf("result: meets the %v target. Record this in RESULT.md.\n", target)
 	}
 }

@@ -17,9 +17,13 @@ A war story impresses an interviewer when:
    is the real interview question. Two scenarios here require pprof
    captures, one requires race-detector output, one requires load-test
    data. "I measured, then I knew" beats "I guessed."
-3. **The business stakes are plain.** Every ticket says who was hurt:
-   planners staring at stale schedules, users whose uploads vanished,
-   an API provider threatening to revoke the key.
+3. **The ticket is real.** Every `PROBLEM.md` follows the standard
+   Jira bug template — field table (Type/Priority/Reporter/Component),
+   Description, Steps to Reproduce, Expected Result, Actual Result,
+   Impact, Environment, Acceptance Criteria — written plainly, the way
+   tickets are actually written. The Impact section states who is
+   affected and how; the Acceptance Criteria are what the tests
+   assert.
 4. **The numbers are real.** Baseline measured FIRST, then the fix,
    then re-measure. The resume bullet uses what the harness actually
    printed on this machine.
