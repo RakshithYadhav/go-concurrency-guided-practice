@@ -87,6 +87,17 @@ the current one closes.
 - `04-thumbnailer-drain/` — **CLOSED** (race gate still to be confirmed
   once Docker Desktop is available). Moved to
   [`go-stories/go-concurrency/04-thumbnailer-drain`](../../go-stories/go-concurrency/04-thumbnailer-drain).
+
+**DEFERRED, not skipped: `03-telemetry-flood` and `06-aggregator-leak`.**
+2026-08-25 decision: after `05-api-quota`, Track 1 fast-forwards to the
+capstone to save time, since `02-schedule-conflict`'s territory (keyed
+per-entity locking) is already exercised by the capstone's own design.
+`03` and `06` are explicitly NOT covered anywhere else in Track 1 or
+the capstone — they're the only source of their keywords (Batching,
+Write Amplification, Backpressure / Goroutine Leaks, pprof Profiling,
+Memory Stability) and, for `06`, the only live pprof-diagnosis story in
+the whole track. Come back and close both after the capstone — do not
+treat this deferral as a permanent skip.
   Next per the suggested order: `05-api-quota`.
 
 ## Definition of done, per scenario
