@@ -78,7 +78,16 @@ rises; the pprof-driven hunt comes last, after Module 7's tooling has
 settled in.
 
 Scenarios are scaffolded ONE AT A TIME: the next one gets built when
-the current one closes. (Only `01-erp-import/` exists right now.)
+the current one closes.
+
+- `01-erp-import/` — **CLOSED.** Moved to
+  [`go-stories/go-concurrency/01-erp-import`](../../go-stories/go-concurrency/01-erp-import)
+  once solved; its four-part package lands in
+  [`go-stories/WAR-STORIES.md`](../../go-stories/WAR-STORIES.md).
+- `04-thumbnailer-drain/` — **CLOSED** (race gate still to be confirmed
+  once Docker Desktop is available). Moved to
+  [`go-stories/go-concurrency/04-thumbnailer-drain`](../../go-stories/go-concurrency/04-thumbnailer-drain).
+  Next per the suggested order: `05-api-quota`.
 
 ## Definition of done, per scenario
 
